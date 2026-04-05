@@ -57,6 +57,8 @@ export interface Signal {
   candle_count?: number;
   status: string;
   outcome?: string | null;
+  entry_price?: number | null;
+  close_price?: number | null;
   actual_close?: number | null;
   created_at: string;
   signal_for_close_at?: string | null;

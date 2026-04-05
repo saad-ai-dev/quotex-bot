@@ -120,6 +120,37 @@ const SignalCard: React.FC<SignalCardProps> = ({ signal, isNew }) => {
         </div>
       </div>
 
+      {/* Entry / Close Price */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20, padding: '12px 16px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid var(--border)' }}>
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>ENTRY PRICE</div>
+          <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: 'var(--text-primary)' }}>
+            {signal.entry_price != null ? signal.entry_price.toFixed(5) : '--'}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>CLOSE PRICE</div>
+          <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: signal.close_price != null && signal.entry_price != null ? (signal.close_price > signal.entry_price ? 'var(--green)' : signal.close_price < signal.entry_price ? 'var(--red)' : 'var(--text-primary)') : 'var(--text-muted)' }}>
+            {signal.close_price != null ? signal.close_price.toFixed(5) : 'Pending...'}
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>P/L</div>
+          {signal.entry_price != null && signal.close_price != null ? (() => {
+            const diff = signal.close_price - signal.entry_price;
+            const pips = Math.abs(diff * 100000).toFixed(1);
+            const isProfit = (direction === 'UP' && diff > 0) || (direction === 'DOWN' && diff < 0);
+            return (
+              <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: isProfit ? 'var(--green)' : 'var(--red)' }}>
+                {isProfit ? '+' : '-'}{pips} pips
+              </div>
+            );
+          })() : (
+            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'monospace', color: 'var(--text-muted)' }}>--</div>
+          )}
+        </div>
+      </div>
+
       {/* Reasons */}
       {signal.reasons && signal.reasons.length > 0 && (
         <div>

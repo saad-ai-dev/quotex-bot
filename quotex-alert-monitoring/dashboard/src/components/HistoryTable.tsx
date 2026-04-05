@@ -121,11 +121,12 @@ const HistoryTable: React.FC<HistoryTableProps> = ({ signals, loading }) => {
           <tr>
             <th onClick={() => handleSort('created_at')}>Time{sortIndicator('created_at')}</th>
             <th onClick={() => handleSort('market_type')}>Market{sortIndicator('market_type')}</th>
-            <th onClick={() => handleSort('expiry_profile')}>Expiry{sortIndicator('expiry_profile')}</th>
             <th onClick={() => handleSort('prediction_direction')}>Direction{sortIndicator('prediction_direction')}</th>
-            <th onClick={() => handleSort('confidence')}>Confidence{sortIndicator('confidence')}</th>
+            <th>Entry</th>
+            <th>Close</th>
+            <th>P/L</th>
+            <th onClick={() => handleSort('confidence')}>Conf{sortIndicator('confidence')}</th>
             <th onClick={() => handleSort('outcome')}>Outcome{sortIndicator('outcome')}</th>
-            <th>Signal ID</th>
           </tr>
         </thead>
         <tbody>
@@ -147,11 +148,25 @@ const HistoryTable: React.FC<HistoryTableProps> = ({ signals, loading }) => {
                       {signal.asset_name || signal.market_type || 'N/A'}
                     </span>
                   </td>
-                  <td>{signal.expiry_profile || '--'}</td>
                   <td>
                     <span className={getDirectionBadgeClass(signal.prediction_direction)}>
                       {signal.prediction_direction?.toUpperCase() || 'N/A'}
                     </span>
+                  </td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                    {signal.entry_price != null ? signal.entry_price.toFixed(5) : '--'}
+                  </td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12, color: signal.close_price != null && signal.entry_price != null ? (signal.close_price > signal.entry_price ? 'var(--green)' : signal.close_price < signal.entry_price ? 'var(--red)' : '') : 'var(--text-muted)' }}>
+                    {signal.close_price != null ? signal.close_price.toFixed(5) : '--'}
+                  </td>
+                  <td style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600 }}>
+                    {signal.entry_price != null && signal.close_price != null ? (() => {
+                      const diff = signal.close_price! - signal.entry_price!;
+                      const pips = Math.abs(diff * 100000).toFixed(1);
+                      const dir = signal.prediction_direction?.toUpperCase();
+                      const isProfit = (dir === 'UP' && diff > 0) || (dir === 'DOWN' && diff < 0);
+                      return <span style={{ color: isProfit ? 'var(--green)' : 'var(--red)' }}>{isProfit ? '+' : '-'}{pips}</span>;
+                    })() : '--'}
                   </td>
                   <td>
                     <span style={{ fontWeight: 600 }}>{signal.confidence?.toFixed(1)}%</span>
@@ -161,13 +176,10 @@ const HistoryTable: React.FC<HistoryTableProps> = ({ signals, loading }) => {
                       {signal.outcome || 'PENDING'}
                     </span>
                   </td>
-                  <td style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-muted)' }}>
-                    {signal.signal_id?.slice(0, 12)}...
-                  </td>
                 </tr>
                 {isExpanded && (
                   <tr>
-                    <td colSpan={7} style={{ padding: 0 }}>
+                    <td colSpan={8} style={{ padding: 0 }}>
                       <div className="expanded-details">
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                           {/* Left: Reasons */}
@@ -204,6 +216,12 @@ const HistoryTable: React.FC<HistoryTableProps> = ({ signals, loading }) => {
                               <div style={{ color: 'var(--text-muted)' }}>Evaluated at:</div>
                               <div>{formatTime(signal.evaluated_at)}</div>
 
+                              <div style={{ color: 'var(--text-muted)' }}>Entry Price:</div>
+                              <div style={{ fontFamily: 'monospace', fontWeight: 600 }}>{signal.entry_price != null ? signal.entry_price.toFixed(5) : '--'}</div>
+
+                              <div style={{ color: 'var(--text-muted)' }}>Close Price:</div>
+                              <div style={{ fontFamily: 'monospace', fontWeight: 600, color: signal.close_price != null && signal.entry_price != null ? (signal.close_price > signal.entry_price ? 'var(--green)' : 'var(--red)') : '' }}>{signal.close_price != null ? signal.close_price.toFixed(5) : '--'}</div>
+
                               <div style={{ color: 'var(--text-muted)' }}>Bullish Score:</div>
                               <div style={{ color: 'var(--green)' }}>{signal.bullish_score?.toFixed(1)}</div>
 
@@ -212,6 +230,9 @@ const HistoryTable: React.FC<HistoryTableProps> = ({ signals, loading }) => {
 
                               <div style={{ color: 'var(--text-muted)' }}>Asset:</div>
                               <div>{signal.asset_name || 'N/A'}</div>
+
+                              <div style={{ color: 'var(--text-muted)' }}>Expiry:</div>
+                              <div>{signal.expiry_profile || '--'}</div>
                             </div>
 
                             {/* Scores */}

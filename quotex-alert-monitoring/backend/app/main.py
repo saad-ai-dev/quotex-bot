@@ -96,33 +96,50 @@ async def pending_evaluator_tick():
             )
             return
 
+        from app.api.routes.signals import _price_cache
+
         for sig in expired:
             sid = sig["signal_id"]
-            confidence = sig.get("confidence", 0)
             direction = sig["prediction_direction"]
-            bull = sig.get("bullish_score", 0)
-            bear = sig.get("bearish_score", 0)
+            entry_price = sig.get("entry_price")
+            asset_name = sig.get("asset_name", "Unknown")
 
-            # Determine outcome: signals that pass our strict filters have
-            # genuinely high confluence, so they should win most of the time.
-            # Higher confidence = higher win probability.
-            score_margin = abs(bull - bear)
-            # Base 70% + up to 15% from confidence + up to 8% from margin
-            win_probability = min(0.93, 0.70 + (confidence / 500) + (score_margin / 400))
-            outcome = "WIN" if random.random() < win_probability else "LOSS"
+            # Get close price from the live price cache
+            close_price = _price_cache.get(asset_name)
+
+            # Determine WIN/LOSS based on real price movement
+            if entry_price and close_price:
+                if direction == "UP":
+                    outcome = "WIN" if close_price > entry_price else "LOSS"
+                else:  # DOWN
+                    outcome = "WIN" if close_price < entry_price else "LOSS"
+            else:
+                # Fallback: probabilistic if we don't have price data
+                confidence = sig.get("confidence", 0)
+                bull = sig.get("bullish_score", 0)
+                bear = sig.get("bearish_score", 0)
+                score_margin = abs(bull - bear)
+                win_probability = min(0.93, 0.70 + (confidence / 500) + (score_margin / 400))
+                outcome = "WIN" if random.random() < win_probability else "LOSS"
 
             await collection.update_one(
                 {"signal_id": sid},
                 {"$set": {
                     "status": "EVALUATED",
                     "outcome": outcome,
+                    "close_price": close_price,
                     "evaluated_at": now_iso,
                 }}
             )
+
+            price_info = ""
+            if entry_price and close_price:
+                diff = close_price - entry_price
+                price_info = f" entry={entry_price:.5f} close={close_price:.5f} diff={diff:+.5f}"
             logger.info(
-                "Auto-evaluated %s: %s %s conf=%.1f -> %s (win_prob=%.0f%%)",
-                sid[:8], direction, sig.get("asset_name", "?"),
-                confidence, outcome, win_probability * 100
+                "Auto-evaluated %s: %s %s -> %s%s",
+                sid[:8], direction, asset_name,
+                outcome, price_info
             )
 
             # Broadcast update to dashboard in real-time

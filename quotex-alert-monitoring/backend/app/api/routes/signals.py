@@ -20,6 +20,10 @@ from app.engine.orchestrator import SignalOrchestrator
 from app.utils.ids import generate_signal_id
 from app.utils.datetime_utils import now_utc, format_timestamp
 
+# Global price cache: latest known price per asset (updated on every ingest)
+# Used by the evaluator to get the close price when a signal expires
+_price_cache: dict[str, float] = {}
+
 
 def _sanitize(obj):
     """Recursively convert numpy types to Python natives for MongoDB/JSON."""
@@ -139,6 +143,16 @@ async def ingest_signal(
     from app.utils.datetime_utils import add_seconds
     eval_time = add_seconds(now, expiry_seconds)
 
+    # Entry price = the last candle's close (the price when the alert fires)
+    entry_price = None
+    if payload.candles:
+        entry_price = float(payload.candles[-1].close)
+
+    # Update the global price cache so the evaluator can get close prices later
+    from app.api.routes.signals import _price_cache
+    if entry_price and payload.asset_name:
+        _price_cache[payload.asset_name] = entry_price
+
     signal_doc = {
         "signal_id": generate_signal_id(),
         "created_at": format_timestamp(now),
@@ -156,6 +170,8 @@ async def ingest_signal(
         "reasons": result.get("reasons", []),
         "detected_features": result.get("detected_features", {}),
         "penalties": result.get("penalties", {}),
+        "entry_price": entry_price,
+        "close_price": None,
         "status": "PENDING",
         "outcome": None,
         "actual_close": None,
