@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 
@@ -168,6 +169,20 @@ async def ingest_signal(
     # Only save directional signals (UP/DOWN) to DB — skip NO_TRADE noise
     collection = db["signals"]
     if signal_doc["prediction_direction"] in ("UP", "DOWN"):
+        # Dedup: don't save if same asset+direction was signaled in last 60 seconds
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+        existing = await collection.find_one({
+            "asset_name": signal_doc["asset_name"],
+            "prediction_direction": signal_doc["prediction_direction"],
+            "created_at": {"$gte": cutoff},
+            "status": "PENDING",
+        })
+        if existing:
+            # Skip duplicate — return existing signal instead
+            existing.pop("_id", None)
+            return JSONResponse(content=existing, status_code=200)
+
         await collection.insert_one(signal_doc)
     else:
         # Still return the doc but don't persist NO_TRADE

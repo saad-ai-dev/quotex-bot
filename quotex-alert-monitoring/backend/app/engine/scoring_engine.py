@@ -160,20 +160,20 @@ class ScoringEngine:
         """
         penalties: Dict[str, float] = {}
 
-        # Conflict penalty: when bull and bear signals are close in magnitude
+        # Conflict penalty: bull and bear scores too close = ambiguous
         score_diff = abs(bullish_score - bearish_score)
-        if score_diff < 8.0:
-            conflict_penalty = (8.0 - score_diff) * 1.2
+        if score_diff < 15.0:
+            conflict_penalty = (15.0 - score_diff) * 2.0
             penalties["conflict_penalty"] = round(conflict_penalty, 2)
 
-        # Chop penalty: from market structure detector chop probability
+        # Chop penalty: choppy market = unreliable signals
         structure = detector_results.get("market_structure", {})
         chop_prob = structure.get("chop_probability", 0.5)
-        if chop_prob > 0.65:
-            chop_penalty = (chop_prob - 0.65) * 25.0
+        if chop_prob > 0.45:
+            chop_penalty = (chop_prob - 0.45) * 40.0
             penalties["chop_penalty"] = round(chop_penalty, 2)
 
-        # Low confluence penalty: need at least 2 detectors agreeing
+        # Low confluence penalty: need at least 3 detectors clearly agreeing
         dominant_dir = "bull" if bullish_score >= bearish_score else "bear"
         agreeing_count = 0
         for cat in self._weights:
@@ -182,19 +182,24 @@ class ScoringEngine:
                 continue
             bc = float(r.get("bullish_contribution", 0))
             brc = float(r.get("bearish_contribution", 0))
-            if dominant_dir == "bull" and bc > brc + 0.5:
+            if dominant_dir == "bull" and bc > brc + 1.5:
                 agreeing_count += 1
-            elif dominant_dir == "bear" and brc > bc + 0.5:
+            elif dominant_dir == "bear" and brc > bc + 1.5:
                 agreeing_count += 1
-        if agreeing_count < 2:
-            penalties["low_confluence_penalty"] = round((2 - agreeing_count) * 6.0, 2)
+        if agreeing_count < 3:
+            penalties["low_confluence_penalty"] = round((3 - agreeing_count) * 12.0, 2)
 
-        # Weak data penalty: too few candles reduce reliability
-        min_ideal_candles = self._config.get("min_ideal_candles", 10)
+        # Weak data penalty
+        min_ideal_candles = self._config.get("min_ideal_candles", 15)
         if candle_count < min_ideal_candles:
             ratio = candle_count / min_ideal_candles if min_ideal_candles > 0 else 0
-            weak_data_penalty = (1.0 - ratio) * 15.0
+            weak_data_penalty = (1.0 - ratio) * 20.0
             penalties["weak_data_penalty"] = round(weak_data_penalty, 2)
+
+        # Ranging market penalty: no clear trend = lower reliability
+        trend_bias = structure.get("trend_bias", "unknown")
+        if trend_bias in ("ranging", "insufficient_data", "unknown"):
+            penalties["ranging_penalty"] = 8.0
 
         # Parsing quality penalty: low chart_read_confidence
         if chart_read_confidence < 0.9:
