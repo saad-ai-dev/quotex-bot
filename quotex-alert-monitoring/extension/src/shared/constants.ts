@@ -15,8 +15,8 @@ export const PRICE_SAMPLE_INTERVAL_MS = 1000;
 /** Candle duration in ms (1 minute) */
 export const CANDLE_DURATION_MS = 60_000;
 
-/** How often to send candles to backend in ms (5 seconds) */
-export const SEND_INTERVAL_MS = 5_000;
+/** How often to send candles to backend in ms (15 seconds) */
+export const SEND_INTERVAL_MS = 15_000;
 
 /** Number of candles to send each time */
 export const CANDLES_TO_SEND = 30;
