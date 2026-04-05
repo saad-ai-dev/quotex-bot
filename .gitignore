@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+venv/
+.venv/
+env/
+.env
+*.log
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build outputs
+dist/
+*.js.map
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# MongoDB
+*.lock
+mongod.log
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Credentials / secrets
+.env
+.env.local
+.env.*.local
+credentials.json
+*.pem
+*.key
+
+# Chrome extension build (rebuild with `npx vite build`)
+quotex-alert-monitoring/extension/dist/
+
+# Claude
+.claude/
