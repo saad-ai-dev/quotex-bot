@@ -1,0 +1,320 @@
+/* ============================================================
+   Quotex Alert Intelligence - Overlay Styles
+   ALERT-ONLY system - NO trade execution
+   ============================================================ */
+
+/* --- Overlay Container --- */
+#qai-overlay-root {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 999999;
+  pointer-events: none;
+  width: 100%;
+  height: 100%;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+#qai-overlay-root * {
+  box-sizing: border-box;
+}
+
+/* --- Animations --- */
+@keyframes qai-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes qai-slide-out {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes qai-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes qai-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* --- Status Badge --- */
+.qai-badge {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  background: rgba(15, 15, 25, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px 14px;
+  z-index: 999999;
+  pointer-events: auto;
+  color: #e0e0e0;
+  font-size: 12px;
+  min-width: 160px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  animation: qai-fade-in 0.3s ease-out;
+}
+
+.qai-badge-monitoring {
+  border-color: rgba(0, 230, 118, 0.2);
+}
+
+.qai-badge-stopped {
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+/* --- Connection Indicator --- */
+.qai-conn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.qai-conn-dot--connected {
+  background: #00e676;
+  box-shadow: 0 0 6px #00e676;
+}
+
+.qai-conn-dot--disconnected {
+  background: #ff1744;
+  box-shadow: 0 0 6px #ff1744;
+  animation: qai-pulse 1.5s ease-in-out infinite;
+}
+
+/* --- Alert Popup --- */
+.qai-alert {
+  position: fixed;
+  top: 80px;
+  right: 16px;
+  width: 280px;
+  background: rgba(15, 15, 25, 0.95);
+  border-radius: 12px;
+  padding: 16px;
+  z-index: 999999;
+  pointer-events: auto;
+  color: #e0e0e0;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  animation: qai-slide-in 0.3s ease-out;
+}
+
+.qai-alert--call {
+  border: 1px solid #00e676;
+}
+
+.qai-alert--put {
+  border: 1px solid #ff1744;
+}
+
+.qai-alert-dismiss {
+  animation: qai-slide-out 0.3s ease-in forwards;
+}
+
+/* --- Direction Arrow --- */
+.qai-arrow {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.qai-arrow--up {
+  color: #00e676;
+}
+
+.qai-arrow--down {
+  color: #ff1744;
+}
+
+/* --- Confidence Display --- */
+.qai-confidence {
+  font-size: 22px;
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+}
+
+/* --- Countdown Display --- */
+.qai-countdown {
+  position: fixed;
+  bottom: 80px;
+  right: 16px;
+  background: rgba(15, 15, 25, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  padding: 10px 16px;
+  z-index: 999999;
+  pointer-events: none;
+  text-align: center;
+  animation: qai-fade-in 0.2s ease-out;
+}
+
+.qai-countdown-value {
+  font-size: 28px;
+  font-weight: 700;
+  font-family: 'Courier New', monospace;
+  margin-top: 4px;
+}
+
+.qai-countdown-value--safe {
+  color: #00e676;
+}
+
+.qai-countdown-value--warn {
+  color: #ffc107;
+}
+
+.qai-countdown-value--danger {
+  color: #ff1744;
+  animation: qai-pulse 0.5s ease-in-out infinite;
+}
+
+/* --- Outcome Badges --- */
+.qai-outcome {
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-block;
+}
+
+.qai-outcome--win {
+  background: rgba(0, 230, 118, 0.15);
+  color: #00e676;
+}
+
+.qai-outcome--loss {
+  background: rgba(255, 23, 68, 0.15);
+  color: #ff1744;
+}
+
+.qai-outcome--pending {
+  background: rgba(255, 193, 7, 0.15);
+  color: #ffc107;
+}
+
+/* --- Market Type Badge --- */
+.qai-market-badge {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #aaa;
+}
+
+/* --- Reasons List --- */
+.qai-reasons {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+  margin-bottom: 8px;
+}
+
+.qai-reason {
+  font-size: 12px;
+  color: #b0b0b0;
+  padding: 2px 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.qai-reason-dot {
+  font-size: 8px;
+  flex-shrink: 0;
+}
+
+.qai-reason-dot--call {
+  color: #00e676;
+}
+
+.qai-reason-dot--put {
+  color: #ff1744;
+}
+
+/* --- Semi-transparent background for modals --- */
+.qai-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999998;
+}
+
+/* --- Monospace numbers --- */
+.qai-mono {
+  font-family: 'Courier New', monospace;
+}
+
+/* --- Expiry Profile Badge --- */
+.qai-expiry {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #aaa;
+}
+
+/* --- Close Button --- */
+.qai-close-btn {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  cursor: pointer;
+  color: #666;
+  font-size: 16px;
+  pointer-events: auto;
+  line-height: 1;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.qai-close-btn:hover {
+  color: #aaa;
+}
+
+/* --- Chart Selection Overlay --- */
+.qai-selection-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9999999;
+  cursor: crosshair;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.qai-selection-rect {
+  position: absolute;
+  border: 2px dashed #00ff88;
+  background: rgba(0, 255, 136, 0.1);
+  pointer-events: none;
+}
+
+.qai-saved-region {
+  position: fixed;
+  border: 1px solid rgba(0, 255, 136, 0.4);
+  background: transparent;
+  z-index: 999998;
+  pointer-events: none;
+  border-radius: 2px;
+}

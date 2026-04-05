@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:market-qx.trade)",
+      "WebFetch(domain:quotex.io)",
+      "WebFetch(domain:qxbroker.com)"
+    ]
+  }
+}

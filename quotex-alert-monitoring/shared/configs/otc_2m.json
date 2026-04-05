@@ -1,0 +1,32 @@
+{
+  "market_type": "OTC",
+  "expiry_profile": "2m",
+  "weights": {
+    "market_structure": 10,
+    "support_resistance": 13,
+    "price_action": 15,
+    "liquidity": 8,
+    "order_blocks": 8,
+    "fvg": 6,
+    "supply_demand": 10,
+    "volume_proxy": 8,
+    "otc_patterns": 22
+  },
+  "thresholds": {
+    "min_confidence": 55,
+    "direction_margin": 12,
+    "min_bullish": 28,
+    "min_bearish": 28
+  },
+  "penalties": {
+    "conflict_weight": 1.0,
+    "chop_weight": 0.8,
+    "weak_data_weight": 1.0,
+    "parsing_quality_weight": 0.5,
+    "timing_weight": 0.5
+  },
+  "timing": {
+    "expiry_seconds": 120,
+    "min_seconds_before_close": 8
+  }
+}

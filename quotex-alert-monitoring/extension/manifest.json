@@ -1,0 +1,69 @@
+{
+  "manifest_version": 3,
+  "name": "Quotex Alert Monitor",
+  "version": "1.0.0",
+  "description": "Real-time alert monitoring for Quotex charts. ALERT-ONLY - does NOT execute trades.",
+  "permissions": [
+    "storage",
+    "notifications",
+    "activeTab",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://quotex.io/*",
+    "https://*.quotex.io/*",
+    "https://qxbroker.com/*",
+    "https://*.qxbroker.com/*",
+    "https://market-qx.trade/*",
+    "https://*.market-qx.trade/*",
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://quotex.io/*",
+        "https://*.quotex.io/*",
+        "https://qxbroker.com/*",
+        "https://*.qxbroker.com/*",
+        "https://market-qx.trade/*",
+        "https://*.market-qx.trade/*"
+      ],
+      "js": ["content-script.js"],
+      "css": ["assets/overlay.css"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    },
+    "default_title": "Quotex Alert Monitor"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/*", "ws-interceptor.js"],
+      "matches": [
+        "https://quotex.io/*",
+        "https://*.quotex.io/*",
+        "https://qxbroker.com/*",
+        "https://*.qxbroker.com/*",
+        "https://market-qx.trade/*",
+        "https://*.market-qx.trade/*"
+      ]
+    }
+  ]
+}

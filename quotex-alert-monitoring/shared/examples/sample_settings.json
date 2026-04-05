@@ -1,0 +1,31 @@
+{
+  "key": "default",
+  "backend_url": "http://localhost:8000",
+  "ws_url": "ws://localhost:8000/ws/signals",
+  "monitoring_enabled": false,
+  "sound_enabled": true,
+  "notifications_enabled": true,
+  "min_confidence": 60,
+  "alert_assets": [],
+  "capture_interval_ms": 5000,
+  "overlay_enabled": true,
+  "overlay_position": "top-right",
+  "theme": "dark",
+  "scoring_weights": {
+    "trend": 25,
+    "momentum": 25,
+    "volatility": 20,
+    "volume": 15,
+    "pattern": 15
+  },
+  "confidence_tiers": {
+    "high": 75,
+    "medium": 50,
+    "low": 0
+  },
+  "default_expiry_seconds": 300,
+  "monitored_assets": [],
+  "version": "1.0.0",
+  "description": "ALERT-ONLY monitoring settings. No trade execution.",
+  "_note": "This is a sample settings document. Copy to MongoDB 'settings' collection."
+}

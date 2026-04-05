@@ -1,0 +1,32 @@
+{
+  "market_type": "LIVE",
+  "expiry_profile": "3m",
+  "weights": {
+    "market_structure": 18,
+    "support_resistance": 15,
+    "price_action": 18,
+    "liquidity": 9,
+    "order_blocks": 9,
+    "fvg": 7,
+    "supply_demand": 12,
+    "volume_proxy": 12,
+    "otc_patterns": 0
+  },
+  "thresholds": {
+    "min_confidence": 35,
+    "direction_margin": 6,
+    "min_bullish": 25,
+    "min_bearish": 25
+  },
+  "penalties": {
+    "conflict_weight": 1.2,
+    "chop_weight": 1.0,
+    "weak_data_weight": 0.8,
+    "parsing_quality_weight": 0.5,
+    "timing_weight": 0.3
+  },
+  "timing": {
+    "expiry_seconds": 180,
+    "min_seconds_before_close": 10
+  }
+}

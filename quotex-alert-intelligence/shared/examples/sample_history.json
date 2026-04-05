@@ -1,0 +1,112 @@
+[
+  {
+    "_id": "sig_20260404_EURUSD_1m_001",
+    "asset": "EUR/USD",
+    "market_type": "LIVE",
+    "expiry_profile": "1m",
+    "direction": "CALL",
+    "confidence": 72.5,
+    "timestamp": "2026-04-04T14:30:00.000Z",
+    "expiry_at": "2026-04-04T14:31:00.000Z",
+    "status": "WIN",
+    "result": {
+      "entry_price": 1.0842,
+      "exit_price": 1.0849,
+      "outcome": "WIN",
+      "resolved_at": "2026-04-04T14:31:00.000Z"
+    },
+    "raw_confidence": 76.9,
+    "bullish_score": 72.5,
+    "bearish_score": 27.5,
+    "alert_text": "CALL EUR/USD | Confidence: 72.5% | Expiry: 1m | Bullish engulfing at support",
+    "created_at": "2026-04-04T14:30:00.000Z"
+  },
+  {
+    "_id": "sig_20260404_GBPUSD_1m_002",
+    "asset": "GBP/USD",
+    "market_type": "LIVE",
+    "expiry_profile": "1m",
+    "direction": "PUT",
+    "confidence": 68.3,
+    "timestamp": "2026-04-04T14:35:00.000Z",
+    "expiry_at": "2026-04-04T14:36:00.000Z",
+    "status": "LOSS",
+    "result": {
+      "entry_price": 1.2654,
+      "exit_price": 1.2660,
+      "outcome": "LOSS",
+      "resolved_at": "2026-04-04T14:36:00.000Z"
+    },
+    "raw_confidence": 71.1,
+    "bullish_score": 31.7,
+    "bearish_score": 68.3,
+    "alert_text": "PUT GBP/USD | Confidence: 68.3% | Expiry: 1m | Bearish rejection at resistance",
+    "created_at": "2026-04-04T14:35:00.000Z"
+  },
+  {
+    "_id": "sig_20260404_USDJPY_2m_003",
+    "asset": "USD/JPY",
+    "market_type": "LIVE",
+    "expiry_profile": "2m",
+    "direction": "CALL",
+    "confidence": 65.1,
+    "timestamp": "2026-04-04T14:40:00.000Z",
+    "expiry_at": "2026-04-04T14:42:00.000Z",
+    "status": "WIN",
+    "result": {
+      "entry_price": 151.230,
+      "exit_price": 151.285,
+      "outcome": "WIN",
+      "resolved_at": "2026-04-04T14:42:00.000Z"
+    },
+    "raw_confidence": 68.4,
+    "bullish_score": 65.1,
+    "bearish_score": 34.9,
+    "alert_text": "CALL USD/JPY | Confidence: 65.1% | Expiry: 2m | Demand zone bounce with trend",
+    "created_at": "2026-04-04T14:40:00.000Z"
+  },
+  {
+    "_id": "sig_20260404_EURUSD_OTC_1m_004",
+    "asset": "EUR/USD (OTC)",
+    "market_type": "OTC",
+    "expiry_profile": "1m",
+    "direction": "PUT",
+    "confidence": 61.8,
+    "timestamp": "2026-04-04T15:00:00.000Z",
+    "expiry_at": "2026-04-04T15:01:00.000Z",
+    "status": "NEUTRAL",
+    "result": {
+      "entry_price": 1.0850,
+      "exit_price": 1.0850,
+      "outcome": "NEUTRAL",
+      "resolved_at": "2026-04-04T15:01:00.000Z"
+    },
+    "raw_confidence": 64.2,
+    "bullish_score": 38.2,
+    "bearish_score": 61.8,
+    "alert_text": "PUT EUR/USD (OTC) | Confidence: 61.8% | Expiry: 1m | OTC cycle reversal pattern",
+    "created_at": "2026-04-04T15:00:00.000Z"
+  },
+  {
+    "_id": "sig_20260404_AUDUSD_3m_005",
+    "asset": "AUD/USD",
+    "market_type": "LIVE",
+    "expiry_profile": "3m",
+    "direction": "CALL",
+    "confidence": 74.2,
+    "timestamp": "2026-04-04T15:10:00.000Z",
+    "expiry_at": "2026-04-04T15:13:00.000Z",
+    "status": "WIN",
+    "result": {
+      "entry_price": 0.6580,
+      "exit_price": 0.6594,
+      "outcome": "WIN",
+      "resolved_at": "2026-04-04T15:13:00.000Z"
+    },
+    "raw_confidence": 78.0,
+    "bullish_score": 74.2,
+    "bearish_score": 25.8,
+    "alert_text": "CALL AUD/USD | Confidence: 74.2% | Expiry: 3m | Strong structure break with FVG fill",
+    "created_at": "2026-04-04T15:10:00.000Z"
+  }
+]

@@ -1,0 +1,38 @@
+{
+  "id": "sig_20260404_143025_eurusd_a7b3c",
+  "asset": "EUR/USD",
+  "direction": "UP",
+  "confidence": 78.5,
+  "confidence_tier": "high",
+  "entry_price": 1.08245,
+  "timestamp": "2026-04-04T14:30:25.000Z",
+  "expiry_seconds": 300,
+  "expiry_time": "2026-04-04T14:35:25.000Z",
+  "status": "active",
+  "indicators": {
+    "rsi": 32.4,
+    "macd_histogram": 0.00023,
+    "bollinger_position": 0.15,
+    "ema_trend": "bullish",
+    "volume_ratio": 1.35,
+    "stochastic_k": 28.7,
+    "stochastic_d": 31.2,
+    "atr": 0.00085
+  },
+  "scoring_breakdown": {
+    "trend_score": 22,
+    "momentum_score": 20,
+    "volatility_score": 16,
+    "volume_score": 12,
+    "pattern_score": 8.5,
+    "total": 78.5,
+    "max_possible": 100
+  },
+  "metadata": {
+    "source": "chart_analysis",
+    "timeframe": "1m",
+    "candles_analyzed": 50,
+    "analysis_duration_ms": 145,
+    "_note": "ALERT-ONLY signal - not used for trade execution"
+  }
+}

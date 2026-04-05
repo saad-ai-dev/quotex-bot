@@ -1,0 +1,37 @@
+{
+  "_id": "default_settings",
+  "active_profile": "live_1m",
+  "market_type": "LIVE",
+  "expiry_profile": "1m",
+  "alerts_enabled": true,
+  "sound_enabled": true,
+  "notification_enabled": true,
+  "auto_refresh_interval_ms": 5000,
+  "max_signals_displayed": 50,
+  "signal_retention_hours": 24,
+  "filters": {
+    "min_confidence": 60,
+    "assets": [],
+    "directions": ["CALL", "PUT"],
+    "market_types": ["LIVE", "OTC"]
+  },
+  "display": {
+    "theme": "dark",
+    "compact_mode": false,
+    "show_penalties": true,
+    "show_component_scores": true,
+    "show_parsing_metadata": false
+  },
+  "scoring_overrides": {
+    "custom_weights": null,
+    "custom_thresholds": null,
+    "custom_penalties": null
+  },
+  "history": {
+    "track_results": true,
+    "max_history_entries": 1000,
+    "export_format": "json"
+  },
+  "created_at": "2026-04-04T00:00:00.000Z",
+  "updated_at": "2026-04-04T00:00:00.000Z"
+}
