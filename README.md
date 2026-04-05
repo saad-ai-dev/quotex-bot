@@ -104,9 +104,36 @@ quotex-bot/
 - **MongoDB 7.0** (local, Docker, or cloud)
 - **Google Chrome** (for the extension)
 
-## Quick Start
+> **Don't have these installed?** The setup script installs everything for you automatically. See below.
 
-You need **3 terminals** plus Chrome.
+## One-Command Setup
+
+The setup script detects your OS, installs all missing dependencies (Python, Node.js, MongoDB), sets up all 3 components, and creates a run script.
+
+```bash
+# Linux / macOS
+chmod +x setup.sh
+./setup.sh
+
+# Windows (PowerShell as Administrator)
+powershell -ExecutionPolicy Bypass -File setup.ps1
+```
+
+After setup, start everything with:
+
+```bash
+# Linux / macOS
+./run.sh
+
+# Windows
+run.bat
+```
+
+That's it. Open http://localhost:5173 for the dashboard, load the extension in Chrome, and go to Quotex.
+
+## Manual Setup (Quick Start)
+
+If you prefer to set things up manually, you need **3 terminals** plus Chrome.
 
 ### 1. Start MongoDB
 
