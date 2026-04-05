@@ -28,6 +28,7 @@ let backendConnected = false;
 let lastPrice: number | null = null;
 let tickCount = 0;
 let historicalCandles: { open: number; high: number; low: number; close: number; timestamp: number }[] = [];
+let wsAssetName: string | null = null; // Asset name from WebSocket data (most reliable)
 
 // ---- Auto-Trade State ----
 let tradeSettings: TradeSettings = {
@@ -335,8 +336,13 @@ function parseQuotesStream(raw: string): void {
     if (Array.isArray(data)) {
       for (const tick of data) {
         if (Array.isArray(tick) && tick.length >= 3) {
+          const asset = tick[0]; // e.g. "AUDUSD_otc" or "GBPJPY"
           const price = tick[2];
-          if (typeof price === "number" && price > 0 && price < 100000) {
+          if (typeof price === "number" && price > 0 && price < 1000000) {
+            // Update the WS-detected asset name (most reliable source)
+            if (typeof asset === "string" && asset.length > 2) {
+              wsAssetName = asset;
+            }
             feedPrice(price);
           }
         }
@@ -350,6 +356,11 @@ function parseHistoryData(raw: string): void {
   try {
     const data = JSON.parse(cleaned);
     if (!data || !data.history || !Array.isArray(data.history)) return;
+
+    // Capture asset name from history data (e.g. "AUDUSD_otc")
+    if (data.asset && typeof data.asset === "string") {
+      wsAssetName = data.asset;
+    }
 
     const history: [number, number, number][] = data.history;
     if (history.length === 0) return;
@@ -480,6 +491,21 @@ function feedPrice(price: number): void {
 }
 
 function readAssetName(): string {
+  // Priority 1: Use asset name from WebSocket data (most reliable)
+  if (wsAssetName) {
+    // Convert "AUDUSD_otc" -> "AUD/USD (OTC)", "GBPJPY" -> "GBP/JPY"
+    let name = wsAssetName;
+    const isOtc = name.endsWith("_otc");
+    if (isOtc) name = name.replace("_otc", "");
+    // Insert "/" between currency codes (e.g. AUDUSD -> AUD/USD)
+    if (name.length >= 6 && !name.includes("/")) {
+      name = name.slice(0, 3) + "/" + name.slice(3);
+    }
+    if (isOtc) name += " (OTC)";
+    return name;
+  }
+
+  // Priority 2: DOM scan fallback
   try {
     const all = document.querySelectorAll<HTMLElement>("span, div, a, button");
     for (const el of all) {
@@ -518,13 +544,14 @@ async function sendCandles(): Promise<void> {
   const assetName = readAssetName();
   const marketType = PriceCollector.detectMarketType(assetName);
 
-  const payload: IngestPayload = {
+  const payload: any = {
     candles,
     market_type: marketType,
     asset_name: assetName.replace(/\s*\(OTC\)\s*/, "").trim(),
     expiry_profile: DEFAULT_EXPIRY_PROFILE,
     parse_mode: DEFAULT_PARSE_MODE,
     chart_read_confidence: DEFAULT_CHART_READ_CONFIDENCE,
+    current_price: lastPrice,  // Real-time tick price for accurate evaluation
   };
 
   try {

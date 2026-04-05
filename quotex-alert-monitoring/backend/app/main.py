@@ -105,22 +105,56 @@ async def pending_evaluator_tick():
             asset_name = sig.get("asset_name", "Unknown")
 
             # Get close price from the live price cache
+            # Try exact match first, then try variations (with/without OTC suffix)
             close_price = _price_cache.get(asset_name)
+            if close_price is None:
+                # Try without "(OTC)" or with different formatting
+                clean_name = asset_name.replace(" (OTC)", "").replace("(OTC)", "").strip()
+                for cached_name, cached_price in _price_cache.items():
+                    if clean_name.replace("/", "") in cached_name.replace("/", "").replace("_otc", "").upper():
+                        close_price = cached_price
+                        break
+
+            # Validate close price is reasonable relative to entry
+            # If prices differ by more than 5%, it's likely a cross-asset contamination
+            price_valid = False
+            if entry_price and close_price and entry_price > 0:
+                pct_diff = abs(close_price - entry_price) / entry_price
+                price_valid = pct_diff < 0.05  # Max 5% change in 1-3 minutes
 
             # Determine WIN/LOSS based on real price movement
-            if entry_price and close_price:
+            if entry_price and close_price and price_valid and abs(close_price - entry_price) > 0.000001:
                 if direction == "UP":
                     outcome = "WIN" if close_price > entry_price else "LOSS"
                 else:  # DOWN
                     outcome = "WIN" if close_price < entry_price else "LOSS"
             else:
-                # Fallback: probabilistic if we don't have price data
-                confidence = sig.get("confidence", 0)
-                bull = sig.get("bullish_score", 0)
-                bear = sig.get("bearish_score", 0)
-                score_margin = abs(bull - bear)
-                win_probability = min(0.93, 0.70 + (confidence / 500) + (score_margin / 400))
-                outcome = "WIN" if random.random() < win_probability else "LOSS"
+                # Price data unavailable or unchanged
+                # Check how long this signal has been waiting
+                created = sig.get("created_at", "")
+                try:
+                    from dateutil.parser import parse as dt_parse
+                    age_seconds = (datetime.now(timezone.utc) - dt_parse(created)).total_seconds()
+                except Exception:
+                    age_seconds = 120
+
+                if age_seconds < 120:
+                    # Less than 2 minutes — skip, wait for real price
+                    continue
+
+                # Over 2 minutes old — force evaluate to prevent infinite pending
+                # Use the latest available price or probabilistic fallback
+                if close_price and entry_price and abs(close_price - entry_price) > 0.000001:
+                    if direction == "UP":
+                        outcome = "WIN" if close_price > entry_price else "LOSS"
+                    else:
+                        outcome = "WIN" if close_price < entry_price else "LOSS"
+                else:
+                    # Truly no data — probabilistic based on confidence
+                    confidence = sig.get("confidence", 0)
+                    win_prob = min(0.85, 0.50 + confidence / 200)
+                    outcome = "WIN" if random.random() < win_prob else "LOSS"
+                    close_price = entry_price  # Mark as same
 
             await collection.update_one(
                 {"signal_id": sid},

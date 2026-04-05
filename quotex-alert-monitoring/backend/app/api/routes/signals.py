@@ -78,6 +78,7 @@ class IngestPayload(BaseModel):
         description="Confidence in the parsed candle data quality (0-1)",
     )
     asset_name: Optional[str] = Field(default=None, description="Asset symbol, e.g. 'EUR/USD'")
+    current_price: Optional[float] = Field(default=None, description="Real-time tick price from WS stream")
 
 
 class EvaluatePayload(BaseModel):
@@ -149,10 +150,18 @@ async def ingest_signal(
     if payload.candles:
         entry_price = float(payload.candles[-1].close)
 
-    # Update the global price cache so the evaluator can get close prices later
-    from app.api.routes.signals import _price_cache
-    if entry_price and payload.asset_name:
-        _price_cache[payload.asset_name] = entry_price
+    # Update the global price cache on EVERY request
+    # This ensures the evaluator always has the latest price
+    import app.api.routes.signals as _signals_mod
+    cache_price = None
+    if payload.current_price:
+        cache_price = float(payload.current_price)
+    elif entry_price:
+        cache_price = entry_price
+    if cache_price and payload.asset_name:
+        _signals_mod._price_cache[payload.asset_name] = cache_price
+        logger.info("Price cache updated: %s = %.5f (current_price=%s)",
+                    payload.asset_name, cache_price, payload.current_price)
 
     signal_doc = {
         "signal_id": generate_signal_id(),
@@ -208,10 +217,14 @@ async def ingest_signal(
     signal_doc.pop("_id", None)
 
     logger.info(
-        "Signal ingested: %s direction=%s confidence=%.2f",
+        "Signal ingested: %s direction=%s confidence=%.2f bull=%.1f bear=%.1f candles=%d penalties=%s",
         signal_doc["signal_id"],
         signal_doc["prediction_direction"],
         signal_doc["confidence"],
+        signal_doc.get("bullish_score", 0),
+        signal_doc.get("bearish_score", 0),
+        signal_doc.get("candle_count", 0),
+        signal_doc.get("penalties", {}),
     )
 
     # Broadcast to WebSocket clients for live dashboard updates

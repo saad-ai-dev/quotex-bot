@@ -13,15 +13,15 @@
     "otc_patterns": 17
   },
   "thresholds": {
-    "min_confidence": 45,
-    "direction_margin": 8,
-    "min_bullish": 22,
-    "min_bearish": 22
+    "min_confidence": 35,
+    "direction_margin": 6,
+    "min_bullish": 18,
+    "min_bearish": 18
   },
   "timing": {
     "expiry_seconds": 60,
     "min_seconds_before_close": 5
   },
   "timing_reliability": 0.85,
-  "min_ideal_candles": 12
+  "min_ideal_candles": 15
 }
