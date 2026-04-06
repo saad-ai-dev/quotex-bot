@@ -104,23 +104,16 @@ async def pending_evaluator_tick():
             entry_price = sig.get("entry_price")
             asset_name = sig.get("asset_name", "Unknown")
 
-            # Get close price from the live price cache
-            # Try exact match first, then try variations (with/without OTC suffix)
+            # Get close price from the live price cache — EXACT match only
+            # No fuzzy matching to prevent cross-asset contamination
             close_price = _price_cache.get(asset_name)
-            if close_price is None:
-                # Try without "(OTC)" or with different formatting
-                clean_name = asset_name.replace(" (OTC)", "").replace("(OTC)", "").strip()
-                for cached_name, cached_price in _price_cache.items():
-                    if clean_name.replace("/", "") in cached_name.replace("/", "").replace("_otc", "").upper():
-                        close_price = cached_price
-                        break
 
             # Validate close price is reasonable relative to entry
             # If prices differ by more than 5%, it's likely a cross-asset contamination
             price_valid = False
             if entry_price and close_price and entry_price > 0:
                 pct_diff = abs(close_price - entry_price) / entry_price
-                price_valid = pct_diff < 0.05  # Max 5% change in 1-3 minutes
+                price_valid = pct_diff < 0.01  # Max 1% change in 1-3 minutes
 
             # Determine WIN/LOSS based on real price movement
             if entry_price and close_price and price_valid and abs(close_price - entry_price) > 0.000001:
@@ -142,19 +135,22 @@ async def pending_evaluator_tick():
                     # Less than 2 minutes — skip, wait for real price
                     continue
 
-                # Over 2 minutes old — force evaluate to prevent infinite pending
-                # Use the latest available price or probabilistic fallback
+                # Over 2 minutes old — force evaluate, but ONLY with valid price
+                # Re-check price validity to prevent cross-asset contamination
+                force_valid = False
                 if close_price and entry_price and abs(close_price - entry_price) > 0.000001:
+                    force_pct = abs(close_price - entry_price) / entry_price
+                    force_valid = force_pct < 0.01  # Must pass 1% check
+
+                if force_valid:
                     if direction == "UP":
                         outcome = "WIN" if close_price > entry_price else "LOSS"
                     else:
                         outcome = "WIN" if close_price < entry_price else "LOSS"
                 else:
-                    # Truly no data — probabilistic based on confidence
-                    confidence = sig.get("confidence", 0)
-                    win_prob = min(0.85, 0.50 + confidence / 200)
-                    outcome = "WIN" if random.random() < win_prob else "LOSS"
-                    close_price = entry_price  # Mark as same
+                    # No valid price data — mark as UNKNOWN
+                    outcome = "UNKNOWN"
+                    close_price = entry_price
 
             await collection.update_one(
                 {"signal_id": sid},

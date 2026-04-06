@@ -84,7 +84,7 @@ function forwardToContentScripts(message: ExtensionMessage): void {
 }
 
 function showSignalNotification(signal: Signal): void {
-  if (!signal || signal.direction === "NO_TRADE") return;
+  if (!signal || !["UP", "DOWN"].includes(signal.direction)) return;
   const arrow = signal.direction === "UP" ? "\u2B06" : "\u2B07";
   chrome.notifications.create(`signal_${Date.now()}`, {
     type: "basic",

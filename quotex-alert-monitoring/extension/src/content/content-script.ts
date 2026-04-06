@@ -5,7 +5,7 @@
  * Can execute trades by clicking Quotex Up/Down buttons when auto-trade is enabled.
  */
 
-import type { IngestPayload, ExtensionMessage, Signal, SignalDirection, TradeSettings } from "../shared/types";
+import type { ExtensionMessage, Signal, SignalDirection, TradeSettings } from "../shared/types";
 import {
   BACKEND_URL,
   INGEST_ENDPOINT,
@@ -64,73 +64,137 @@ function isQuotexPage(): boolean {
 // TRADE EXECUTION - Finds and clicks Quotex's Up/Down buttons
 // ============================================================================
 
-/** Find a button by its visible text content */
-function findButtonByText(text: string): HTMLElement | null {
-  const buttons = document.querySelectorAll<HTMLElement>("button, a, div[role='button']");
-  for (const btn of buttons) {
-    const btnText = btn.textContent?.trim().toLowerCase();
-    if (btnText === text.toLowerCase()) {
-      // Verify it's visible and clickable
-      const style = window.getComputedStyle(btn);
-      if (style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0") {
-        return btn;
+/** Find the Up or Down button on the Quotex trading panel.
+ *
+ * Quotex renders two large buttons in the trade panel:
+ *   - Green "Up" button (call/buy)
+ *   - Red/orange "Down" button (put/sell)
+ *
+ * We use multiple strategies to locate them reliably.
+ */
+function findTradeButton(direction: SignalDirection): HTMLElement | null {
+  const isUp = direction === "UP";
+  const targetText = isUp ? "up" : "down";
+
+  // Strategy 1: CSS class selectors commonly used by Quotex
+  // Quotex uses classes like .btn-call/.btn-put, .call-btn/.put-btn, or color-based classes
+  const classSelectors = isUp
+    ? [
+        'button.btn-call', 'button.call-btn', 'button[class*="call"]',
+        'button[class*="green"]', 'button[class*="up"]',
+        'a.btn-call', 'a[class*="call"]',
+      ]
+    : [
+        'button.btn-put', 'button.put-btn', 'button[class*="put"]',
+        'button[class*="red"]', 'button[class*="down"]',
+        'a.btn-put', 'a[class*="put"]',
+      ];
+
+  for (const sel of classSelectors) {
+    try {
+      const el = document.querySelector<HTMLElement>(sel);
+      if (el && isVisible(el)) {
+        console.log(`[AutoTrade] Found ${direction} button via selector: ${sel}`);
+        return el;
       }
+    } catch { /* invalid selector, skip */ }
+  }
+
+  // Strategy 2: Find by visible text content (exact match)
+  const allClickable = document.querySelectorAll<HTMLElement>("button, a, div[role='button'], span[role='button']");
+  for (const btn of allClickable) {
+    const text = btn.textContent?.trim().toLowerCase() || "";
+    if (text === targetText && isVisible(btn)) {
+      console.log(`[AutoTrade] Found ${direction} button via exact text match`);
+      return btn;
     }
   }
 
-  // Fallback: partial match
-  for (const btn of buttons) {
-    const btnText = btn.textContent?.trim().toLowerCase();
-    if (btnText && btnText.includes(text.toLowerCase()) && btnText.length < 20) {
-      const style = window.getComputedStyle(btn);
-      if (style.display !== "none" && style.visibility !== "hidden") {
-        return btn;
-      }
+  // Strategy 3: Find by partial text + background color confirmation
+  // Up = green background, Down = red/orange background
+  const allButtons = document.querySelectorAll<HTMLElement>("button, a[class*='btn']");
+  for (const b of allButtons) {
+    const text = b.textContent?.trim().toLowerCase() || "";
+    if (!text.includes(targetText)) continue;
+    if (!isVisible(b)) continue;
+    if (text.length > 30) continue; // skip buttons with too much text
+
+    const bg = window.getComputedStyle(b).backgroundColor;
+    if (isUp && isGreenish(bg)) {
+      console.log(`[AutoTrade] Found UP button via text+green color`);
+      return b;
     }
+    if (!isUp && isReddish(bg)) {
+      console.log(`[AutoTrade] Found DOWN button via text+red color`);
+      return b;
+    }
+
+    // Even without color match, text match is good enough
+    console.log(`[AutoTrade] Found ${direction} button via partial text: "${text}"`);
+    return b;
+  }
+
+  // Strategy 4: Pure color-based search (no text needed)
+  // The Up/Down buttons are typically the two largest colored buttons on the page
+  const colorCandidates: { el: HTMLElement; area: number }[] = [];
+  for (const b of allButtons) {
+    if (!isVisible(b)) continue;
+    const bg = window.getComputedStyle(b).backgroundColor;
+    const rect = b.getBoundingClientRect();
+    const area = rect.width * rect.height;
+    if (area < 500) continue; // skip tiny buttons
+
+    if (isUp && isGreenish(bg)) {
+      colorCandidates.push({ el: b, area });
+    }
+    if (!isUp && isReddish(bg)) {
+      colorCandidates.push({ el: b, area });
+    }
+  }
+
+  if (colorCandidates.length > 0) {
+    // Pick the largest matching button
+    colorCandidates.sort((a, b) => b.area - a.area);
+    console.log(`[AutoTrade] Found ${direction} button via color (area=${colorCandidates[0].area})`);
+    return colorCandidates[0].el;
+  }
+
+  console.error(`[AutoTrade] Could NOT find ${direction} button. Dumping visible buttons...`);
+  for (const b of allButtons) {
+    if (!isVisible(b)) continue;
+    const bg = window.getComputedStyle(b).backgroundColor;
+    console.log(`  button: text="${b.textContent?.trim()}" bg="${bg}" class="${b.className}"`);
   }
 
   return null;
 }
 
-/** Find the Up or Down button on the Quotex trading panel */
-function findTradeButton(direction: SignalDirection): HTMLElement | null {
-  // Strategy 1: Find by exact text "Up" or "Down"
-  const btn = findButtonByText(direction === "UP" ? "Up" : "Down");
-  if (btn) return btn;
+function isVisible(el: HTMLElement): boolean {
+  const style = window.getComputedStyle(el);
+  return style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+}
 
-  // Strategy 2: Find by background color
-  // Up button = green, Down button = red/coral
-  const allButtons = document.querySelectorAll<HTMLElement>("button");
-  for (const b of allButtons) {
-    const style = window.getComputedStyle(b);
-    const bg = style.backgroundColor;
-    const text = b.textContent?.trim().toLowerCase() || "";
+function isGreenish(bg: string): boolean {
+  // Match various green shades: rgb(R, G, B) where G > R and G > B
+  const match = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (!match) return false;
+  const [, r, g, b] = match.map(Number);
+  return g > 100 && g > r * 1.3 && g > b * 1.3;
+}
 
-    if (direction === "UP") {
-      // Green button: rgb(46, 204, 113) or similar green shades
-      if ((bg.includes("46, 204") || bg.includes("39, 174") || bg.includes("76, 175") ||
-           text === "up" || text === "call" || text === "buy") &&
-          style.display !== "none") {
-        return b;
-      }
-    } else {
-      // Red button: rgb(231, 76, 60) or similar red shades
-      if ((bg.includes("231, 76") || bg.includes("234, 57") || bg.includes("255, 82") ||
-           text === "down" || text === "put" || text === "sell") &&
-          style.display !== "none") {
-        return b;
-      }
-    }
-  }
-
-  return null;
+function isReddish(bg: string): boolean {
+  // Match various red/orange shades: rgb(R, G, B) where R > G and R > B
+  const match = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (!match) return false;
+  const [, r, g, b] = match.map(Number);
+  return r > 150 && r > g * 1.5 && r > b * 1.2;
 }
 
 /** Execute a trade by clicking the appropriate button */
 function executeTrade(direction: SignalDirection): boolean {
-  // Cooldown: prevent rapid clicks (min 2 seconds between trades)
+  // Cooldown: prevent rapid clicks (min 60 seconds between trades)
   const now = Date.now();
-  if (now - lastTradeTime < 2000) {
+  if (now - lastTradeTime < 60000) {
     console.log("[AutoTrade] Cooldown active, skipping");
     return false;
   }
@@ -336,15 +400,18 @@ function parseQuotesStream(raw: string): void {
     if (Array.isArray(data)) {
       for (const tick of data) {
         if (Array.isArray(tick) && tick.length >= 3) {
-          const asset = tick[0]; // e.g. "AUDUSD_otc" or "GBPJPY"
+          const asset = tick[0] as string; // e.g. "AUDUSD_otc" or "GBPJPY"
           const price = tick[2];
-          if (typeof price === "number" && price > 0 && price < 1000000) {
-            // Update the WS-detected asset name (most reliable source)
-            if (typeof asset === "string" && asset.length > 2) {
-              wsAssetName = asset;
-            }
-            feedPrice(price);
-          }
+          if (typeof price !== "number" || price <= 0 || price >= 1000000) continue;
+
+          // ONLY feed prices from the currently tracked asset.
+          // wsAssetName is set ONLY by history/list/v2 (the chart the user is viewing).
+          // quotes/stream sends ticks for ALL subscribed assets — we MUST filter.
+          if (!wsAssetName) continue;  // Wait for history to identify the asset first
+          if (asset !== wsAssetName) continue;  // Skip other assets' ticks
+
+          lastPrice = price;
+          feedPrice(price);
         }
       }
     }
@@ -357,8 +424,15 @@ function parseHistoryData(raw: string): void {
     const data = JSON.parse(cleaned);
     if (!data || !data.history || !Array.isArray(data.history)) return;
 
-    // Capture asset name from history data (e.g. "AUDUSD_otc")
+    // Capture asset name from history data — this is the AUTHORITATIVE source
+    // (it's the asset the user is viewing on the chart)
     if (data.asset && typeof data.asset === "string") {
+      if (wsAssetName !== data.asset) {
+        console.log(`[AlertMonitor] Chart asset set: ${wsAssetName || 'none'} -> ${data.asset}, clearing all data`);
+        historicalCandles = [];
+        priceCollector = new PriceCollector();
+        lastPrice = null;  // Reset — will be set from this asset's history/ticks
+      }
       wsAssetName = data.asset;
     }
 
@@ -407,7 +481,7 @@ function parseChartNotification(raw: string): void {
 }
 
 /** Parse order events to detect trade outcomes (WIN/LOSS) */
-function parseOrderEvents(raw: string, eventName: string): void {
+function parseOrderEvents(raw: string, _eventName: string): void {
   const cleaned = raw.replace(/^[\x00-\x1f]+/, "");
   try {
     const data = JSON.parse(cleaned);
@@ -431,7 +505,7 @@ function parseOrderEvents(raw: string, eventName: string): void {
   } catch {}
 }
 
-function tryGenericParse(raw: string, eventName: string | null): void {
+function tryGenericParse(raw: string, _eventName: string | null): void {
   const cleaned = raw.replace(/^[\x00-\x1f]+/, "");
   try {
     const data = JSON.parse(cleaned);
@@ -565,14 +639,21 @@ async function sendCandles(): Promise<void> {
       if (!backendConnected) { backendConnected = true; overlay?.setConnected(true); }
       const data = await response.json() as Record<string, any>;
       if (data.prediction_direction && data.prediction_direction !== "NO_TRADE") {
-        const signal: Signal = {
-          id: data.signal_id || "",
-          asset: data.asset_name || assetName,
-          direction: data.prediction_direction,
-          confidence: data.confidence || 0,
-          timestamp: data.created_at || new Date().toISOString(),
-        };
-        handleSignal(signal);
+        const signalAsset = data.asset_name || assetName;
+        // Only handle signals for THIS tab's asset — prevent cross-tab trade mixing
+        const myAsset = readAssetName().replace(/\s*\(OTC\)\s*/, "").trim();
+        if (signalAsset === myAsset || !myAsset) {
+          const signal: Signal = {
+            id: data.signal_id || "",
+            asset: signalAsset,
+            direction: data.prediction_direction,
+            confidence: data.confidence || 0,
+            timestamp: data.created_at || new Date().toISOString(),
+          };
+          handleSignal(signal);
+        } else {
+          console.log(`[AlertMonitor] Signal for ${signalAsset} ignored (this tab is ${myAsset})`);
+        }
       }
     } else {
       backendConnected = false;
@@ -589,15 +670,25 @@ async function sendCandles(): Promise<void> {
   }
 }
 
+let lastTradedSignalId: string | null = null;
+
 function handleSignal(signal: Signal): void {
   console.log(`[AlertMonitor] SIGNAL: ${signal.direction} ${signal.asset} ${signal.confidence}%`);
   overlay?.setLastDirection(signal.direction);
   chrome.runtime.sendMessage({ type: "NEW_SIGNAL", payload: signal } as ExtensionMessage).catch(() => {});
 
   // AUTO-TRADE: Execute trade if enabled
+  // CRITICAL: Only trade ONCE per signal ID to prevent duplicate clicks
   if (tradeSettings.autoTradeEnabled && !tradingPaused) {
+    if (signal.id && signal.id === lastTradedSignalId) {
+      console.log(`[AutoTrade] Already traded signal ${signal.id}, skipping`);
+      return;
+    }
     console.log(`[AutoTrade] Signal received, executing ${signal.direction} trade...`);
-    executeTrade(signal.direction);
+    const success = executeTrade(signal.direction);
+    if (success) {
+      lastTradedSignalId = signal.id;
+    }
   } else if (tradingPaused) {
     console.log(`[AutoTrade] Signal received but trading PAUSED (${consecutiveLosses} consecutive losses)`);
     overlay?.setTradeStatus(`PAUSED: ${consecutiveLosses} losses`);
@@ -622,6 +713,15 @@ function startMonitoring(): void {
 
   sendTimer = setInterval(() => sendCandles(), SEND_INTERVAL_MS);
   setTimeout(() => { if (monitoring) sendCandles(); }, 3000);
+
+  // Probe trade buttons after page settles
+  setTimeout(() => {
+    const upBtn = findTradeButton("UP");
+    const downBtn = findTradeButton("DOWN");
+    console.log(`[AutoTrade] Button probe: UP=${upBtn ? "FOUND" : "NOT FOUND"}, DOWN=${downBtn ? "FOUND" : "NOT FOUND"}`);
+    if (upBtn) console.log(`[AutoTrade] UP button: tag=${upBtn.tagName} class="${upBtn.className}" text="${upBtn.textContent?.trim()}"`);
+    if (downBtn) console.log(`[AutoTrade] DOWN button: tag=${downBtn.tagName} class="${downBtn.className}" text="${downBtn.textContent?.trim()}"`);
+  }, 5000);
 }
 
 function stopMonitoring(): void {
@@ -711,7 +811,7 @@ function fullInit(): void {
 
   fetch(`${BACKEND_URL}/health`)
     .then(r => r.json())
-    .then(d => {
+    .then(_d => {
       backendConnected = true;
       overlay?.setConnected(true);
       overlay?.setStatus("Active");
@@ -720,7 +820,7 @@ function fullInit(): void {
         payload: { active: true, asset: readAssetName(), market: "LIVE", candleCount: 0 },
       } as ExtensionMessage).catch(() => {});
     })
-    .catch(e => {
+    .catch(_e => {
       overlay?.setStatus("Backend offline!");
     });
 
