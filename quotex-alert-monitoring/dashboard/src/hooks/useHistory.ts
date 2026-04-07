@@ -46,6 +46,7 @@ export function useHistory(): UseHistoryReturn {
         skip,
         limit: filters.per_page,
         directional_only: 1,  // Only show UP/DOWN signals in history
+        executed_only: 1,
       };
       if (filters.market_type !== 'All') params.market_type = filters.market_type;
       if (filters.expiry_profile !== 'All') params.expiry_profile = filters.expiry_profile;

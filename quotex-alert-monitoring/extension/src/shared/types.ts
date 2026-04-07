@@ -10,6 +10,8 @@ export interface Signal {
   direction: SignalDirection;
   confidence: number;
   timestamp: string;
+  executionReady?: boolean;
+  executionBlockers?: string[];
 }
 
 export interface CandleData {

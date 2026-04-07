@@ -29,6 +29,10 @@ let lastPrice: number | null = null;
 let tickCount = 0;
 let historicalCandles: { open: number; high: number; low: number; close: number; timestamp: number }[] = [];
 let wsAssetName: string | null = null; // Asset name from WebSocket data (most reliable)
+let lastWsPriceAt = 0;
+let lastAssetSwitchAt = 0;
+const MIN_CANDLES_BEFORE_SEND = 18;
+const DOM_FALLBACK_SUPPRESS_MS = 15_000;
 
 // ---- Auto-Trade State ----
 let tradeSettings: TradeSettings = {
@@ -41,6 +45,21 @@ let totalTrades = 0;
 let tradeWins = 0;
 let tradeLosses = 0;
 let lastTradeTime = 0; // Prevent rapid double-clicks
+let lastTradeAsset = "";
+let currentSignalIdForTrade: string | null = null;
+let activeTrade: {
+  signalId: string | null;
+  asset: string;
+  direction: SignalDirection;
+  openedAt: number;
+  candleKey: number;
+} | null = null;
+const settledOrderIds = new Set<string>();
+const assetLossCooldownUntil = new Map<string, number>();
+const tradedAssetCandleKeys = new Map<string, number>();
+const ACTIVE_TRADE_TIMEOUT_MS = 95_000;
+const SAME_ASSET_COOLDOWN_MS = 3 * 60_000;
+const MIN_EXECUTION_CONFIDENCE = 56;
 
 // Load saved trade settings
 chrome.storage.local.get(["tradeSettings", "tradeState"], (result) => {
@@ -192,6 +211,8 @@ function isReddish(bg: string): boolean {
 
 /** Execute a trade by clicking the appropriate button */
 function executeTrade(direction: SignalDirection): boolean {
+  clearStaleActiveTrade();
+
   // Cooldown: prevent rapid clicks (min 60 seconds between trades)
   const now = Date.now();
   if (now - lastTradeTime < 60000) {
@@ -211,6 +232,27 @@ function executeTrade(direction: SignalDirection): boolean {
     return false;
   }
 
+  const asset = normalizeAssetName(readAssetName());
+  const candleKey = getCurrentCandleKey();
+  const cooldownUntil = assetLossCooldownUntil.get(asset) || 0;
+  if (cooldownUntil > now) {
+    console.log(`[AutoTrade] ${asset} is cooling down after loss, skipping`);
+    overlay?.setTradeStatus(`${asset} cooldown active`);
+    return false;
+  }
+
+  if (activeTrade) {
+    console.log(`[AutoTrade] Active trade still pending for ${activeTrade.asset}, skipping`);
+    overlay?.setTradeStatus(`Pending ${activeTrade.asset} trade`);
+    return false;
+  }
+
+  if (tradedAssetCandleKeys.get(asset) === candleKey) {
+    console.log(`[AutoTrade] Already traded ${asset} on this candle, skipping`);
+    overlay?.setTradeStatus(`Already traded ${asset} this candle`);
+    return false;
+  }
+
   const button = findTradeButton(direction);
   if (!button) {
     console.error(`[AutoTrade] Could not find ${direction} button on page!`);
@@ -222,7 +264,16 @@ function executeTrade(direction: SignalDirection): boolean {
   console.log(`[AutoTrade] Clicking ${direction} button...`);
   button.click();
   lastTradeTime = now;
+  lastTradeAsset = asset;
   totalTrades++;
+  activeTrade = {
+    signalId: currentSignalIdForTrade,
+    asset,
+    direction,
+    openedAt: now,
+    candleKey,
+  };
+  tradedAssetCandleKeys.set(asset, candleKey);
 
   // Notify background
   chrome.runtime.sendMessage({
@@ -242,8 +293,32 @@ function executeTrade(direction: SignalDirection): boolean {
   return true;
 }
 
+async function notifyBackendTradeExecuted(signalId: string | null): Promise<void> {
+  if (!signalId) return;
+
+  try {
+    await fetch(`${BACKEND_URL}/api/signals/${signalId}/executed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        executed_price: lastPrice,
+        asset_name: readAssetName().replace(/\s*\(OTC\)\s*/, "").trim(),
+      }),
+    });
+  } catch (error) {
+    console.warn("[AutoTrade] Failed to mark executed signal in backend:", error);
+  }
+}
+
 /** Record a trade result (called when we detect a trade outcome from WS) */
 function recordTradeResult(outcome: "WIN" | "LOSS"): void {
+  clearStaleActiveTrade();
+
+  if (!activeTrade) {
+    console.log(`[AutoTrade] Ignoring ${outcome} result with no active tracked trade`);
+    return;
+  }
+
   if (outcome === "WIN") {
     tradeWins++;
     consecutiveLosses = 0;
@@ -251,6 +326,7 @@ function recordTradeResult(outcome: "WIN" | "LOSS"): void {
   } else {
     tradeLosses++;
     consecutiveLosses++;
+    assetLossCooldownUntil.set(activeTrade.asset, Date.now() + SAME_ASSET_COOLDOWN_MS);
 
     // Check max consecutive losses
     if (consecutiveLosses >= tradeSettings.maxConsecutiveLosses) {
@@ -268,6 +344,8 @@ function recordTradeResult(outcome: "WIN" | "LOSS"): void {
     outcome,
   } as ExtensionMessage).catch(() => {});
 
+  activeTrade = null;
+  currentSignalIdForTrade = null;
   console.log(`[AutoTrade] Result: ${outcome} | Streak: ${consecutiveLosses} losses | W:${tradeWins} L:${tradeLosses}`);
 }
 
@@ -278,8 +356,28 @@ function saveTradeState(): void {
     totalTrades,
     wins: tradeWins,
     losses: tradeLosses,
+    activeTradeAsset: activeTrade?.asset || null,
+    activeTradeDirection: activeTrade?.direction || null,
   };
   chrome.storage.local.set({ tradeState: state });
+}
+
+function normalizeAssetName(asset: string | null | undefined): string {
+  return (asset || "Unknown").replace(/\s*\(OTC\)\s*/g, "").replace(/\s+/g, "").trim().toUpperCase();
+}
+
+function getCurrentCandleKey(): number {
+  return Math.floor(Date.now() / 60_000);
+}
+
+function clearStaleActiveTrade(): void {
+  if (!activeTrade) return;
+  if (Date.now() - activeTrade.openedAt <= ACTIVE_TRADE_TIMEOUT_MS) return;
+
+  console.warn(`[AutoTrade] Clearing stale active trade for ${activeTrade.asset}`);
+  activeTrade = null;
+  currentSignalIdForTrade = null;
+  saveTradeState();
 }
 
 // ============================================================================
@@ -384,7 +482,7 @@ function processWsMessage(raw: string): void {
     parseHistoryData(raw);
   } else if (eventName === "s_chart_notification/get") {
     parseChartNotification(raw);
-  } else if (eventName === "orders/closed/list" || eventName === "orders/opened/list") {
+  } else if (eventName === "orders/closed/list") {
     parseOrderEvents(raw, eventName);
   } else if (eventName === "instruments/list") {
     // Skip
@@ -411,6 +509,7 @@ function parseQuotesStream(raw: string): void {
           if (asset !== wsAssetName) continue;  // Skip other assets' ticks
 
           lastPrice = price;
+          lastWsPriceAt = Date.now();
           feedPrice(price);
         }
       }
@@ -432,6 +531,7 @@ function parseHistoryData(raw: string): void {
         historicalCandles = [];
         priceCollector = new PriceCollector();
         lastPrice = null;  // Reset — will be set from this asset's history/ticks
+        lastAssetSwitchAt = Date.now();
       }
       wsAssetName = data.asset;
     }
@@ -461,6 +561,7 @@ function parseHistoryData(raw: string): void {
         open: c.open, high: c.high, low: c.low, close: c.close, timestamp: c.ts,
       }));
       console.log(`[AlertMonitor] Built ${historicalCandles.length} candles from ${history.length} history ticks`);
+      lastWsPriceAt = Date.now();
       feedPrice(builtCandles[builtCandles.length - 1].close);
     }
   } catch (e) {
@@ -481,25 +582,40 @@ function parseChartNotification(raw: string): void {
 }
 
 /** Parse order events to detect trade outcomes (WIN/LOSS) */
-function parseOrderEvents(raw: string, _eventName: string): void {
+function parseOrderEvents(raw: string, eventName: string): void {
+  if (eventName !== "orders/closed/list") return;
+
   const cleaned = raw.replace(/^[\x00-\x1f]+/, "");
   try {
     const data = JSON.parse(cleaned);
     if (!Array.isArray(data)) return;
+    if (!activeTrade) return;
 
     for (const order of data) {
       if (!order || typeof order !== "object") continue;
 
-      // Quotex order fields: profit, status, close_reason, etc.
-      const profit = order.profit ?? order.pnl ?? order.win;
-      const status = order.status ?? order.close_reason;
+      const orderId = String(order.id ?? order.order_id ?? order.position_id ?? "");
+      if (orderId && settledOrderIds.has(orderId)) continue;
 
-      if (typeof profit === "number" && status) {
-        if (profit > 0) {
-          recordTradeResult("WIN");
-        } else if (profit <= 0 && status !== "opened") {
-          recordTradeResult("LOSS");
-        }
+      const status = String(order.status ?? order.close_reason ?? "").toLowerCase();
+      if (!status || status === "opened" || status === "open" || status === "pending") continue;
+
+      const asset = normalizeAssetName(String(order.asset ?? order.asset_name ?? order.instrument ?? ""));
+      if (asset && activeTrade.asset && asset !== activeTrade.asset) continue;
+
+      const profit = order.profit ?? order.pnl ?? order.win;
+      if (typeof profit !== "number") continue;
+
+      if (orderId) settledOrderIds.add(orderId);
+
+      if (profit > 0) {
+        recordTradeResult("WIN");
+        return;
+      }
+
+      if (profit < 0 || profit === 0) {
+        recordTradeResult("LOSS");
+        return;
       }
     }
   } catch {}
@@ -527,6 +643,13 @@ function tryGenericParse(raw: string, _eventName: string | null): void {
 let domScanLogCount = 0;
 
 function scanDomForPrice(): number | null {
+  // Once we have authoritative WS/history data for the current asset,
+  // suppress DOM fallback for a while to avoid stale prices from other
+  // instrument widgets contaminating the active chart feed.
+  if (wsAssetName && Date.now() - lastWsPriceAt < DOM_FALLBACK_SUPPRESS_MS) {
+    return null;
+  }
+
   try {
     const all = document.querySelectorAll<HTMLElement>("*");
     for (const el of all) {
@@ -538,6 +661,12 @@ function scanDomForPrice(): number | null {
       if (match) {
         const p = parseFloat(match[1]);
         if (p > 0.0001 && p < 1_000_000) {
+          if (lastPrice && lastPrice > 0) {
+            const pctDiff = Math.abs(p - lastPrice) / lastPrice;
+            if (pctDiff > 0.02) {
+              continue;
+            }
+          }
           domScanLogCount++;
           if (domScanLogCount <= 5) {
             console.log(`[AlertMonitor DOM] Found price: ${p} in <${el.tagName}>`);
@@ -598,6 +727,10 @@ function readAssetName(): string {
 async function sendCandles(): Promise<void> {
   if (!priceCollector) return;
 
+  if (lastAssetSwitchAt && Date.now() - lastAssetSwitchAt < 10_000) {
+    return;
+  }
+
   let candles = [...historicalCandles];
   const rtCandles = priceCollector.getCandles(CANDLES_TO_SEND);
   for (const c of rtCandles) {
@@ -609,6 +742,13 @@ async function sendCandles(): Promise<void> {
   }
   candles.sort((a, b) => a.timestamp - b.timestamp);
   candles = candles.slice(-CANDLES_TO_SEND);
+
+  if (candles.length < MIN_CANDLES_BEFORE_SEND) {
+    if (candles.length > 0 && candles.length % 5 === 0) {
+      console.log(`[AlertMonitor] Waiting for more candles before analysis: ${candles.length}/${MIN_CANDLES_BEFORE_SEND}`);
+    }
+    return;
+  }
 
   if (candles.length === 0 && lastPrice !== null) {
     candles = [{ open: lastPrice, high: lastPrice, low: lastPrice, close: lastPrice, timestamp: Date.now() / 1000 }];
@@ -649,6 +789,8 @@ async function sendCandles(): Promise<void> {
             direction: data.prediction_direction,
             confidence: data.confidence || 0,
             timestamp: data.created_at || new Date().toISOString(),
+            executionReady: !!data.execution_ready,
+            executionBlockers: Array.isArray(data.execution_blockers) ? data.execution_blockers : [],
           };
           handleSignal(signal);
         } else {
@@ -673,6 +815,7 @@ async function sendCandles(): Promise<void> {
 let lastTradedSignalId: string | null = null;
 
 function handleSignal(signal: Signal): void {
+  clearStaleActiveTrade();
   console.log(`[AlertMonitor] SIGNAL: ${signal.direction} ${signal.asset} ${signal.confidence}%`);
   overlay?.setLastDirection(signal.direction);
   chrome.runtime.sendMessage({ type: "NEW_SIGNAL", payload: signal } as ExtensionMessage).catch(() => {});
@@ -680,14 +823,33 @@ function handleSignal(signal: Signal): void {
   // AUTO-TRADE: Execute trade if enabled
   // CRITICAL: Only trade ONCE per signal ID to prevent duplicate clicks
   if (tradeSettings.autoTradeEnabled && !tradingPaused) {
+    if (signal.confidence < MIN_EXECUTION_CONFIDENCE) {
+      console.log(`[AutoTrade] Signal confidence ${signal.confidence}% below execution floor ${MIN_EXECUTION_CONFIDENCE}%`);
+      overlay?.setTradeStatus(`Blocked: confidence ${signal.confidence}%`);
+      setTimeout(() => overlay?.setTradeStatus(null), 4000);
+      return;
+    }
+    if (!signal.executionReady) {
+      const blockers = signal.executionBlockers?.length
+        ? signal.executionBlockers.join(", ")
+        : "execution filter blocked";
+      console.log(`[AutoTrade] Alert only, trade blocked: ${blockers}`);
+      overlay?.setTradeStatus(`Blocked: ${blockers}`);
+      setTimeout(() => overlay?.setTradeStatus(null), 4000);
+      return;
+    }
     if (signal.id && signal.id === lastTradedSignalId) {
       console.log(`[AutoTrade] Already traded signal ${signal.id}, skipping`);
       return;
     }
+    currentSignalIdForTrade = signal.id || null;
     console.log(`[AutoTrade] Signal received, executing ${signal.direction} trade...`);
     const success = executeTrade(signal.direction);
     if (success) {
       lastTradedSignalId = signal.id;
+      notifyBackendTradeExecuted(signal.id || null).catch(() => {});
+    } else {
+      currentSignalIdForTrade = null;
     }
   } else if (tradingPaused) {
     console.log(`[AutoTrade] Signal received but trading PAUSED (${consecutiveLosses} consecutive losses)`);
@@ -771,6 +933,8 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         tradingPaused,
         autoTradeEnabled: tradeSettings.autoTradeEnabled,
         maxConsecutiveLosses: tradeSettings.maxConsecutiveLosses,
+        activeTradeAsset: activeTrade?.asset ?? null,
+        lastTradeAsset,
       }); break;
 
     case "RESET_TRADE_STATE":
@@ -779,6 +943,10 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       totalTrades = 0;
       tradeWins = 0;
       tradeLosses = 0;
+      activeTrade = null;
+      currentSignalIdForTrade = null;
+      assetLossCooldownUntil.clear();
+      tradedAssetCandleKeys.clear();
       saveTradeState();
       console.log("[AutoTrade] State reset");
       sendResponse({ ok: true }); break;

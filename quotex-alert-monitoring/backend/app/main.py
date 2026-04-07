@@ -80,6 +80,7 @@ async def pending_evaluator_tick():
         # Find pending directional signals whose evaluation time has passed
         expired = await collection.find({
             "status": "PENDING",
+            "was_executed": True,
             "signal_for_close_at": {"$lte": now_iso},
             "prediction_direction": {"$in": ["UP", "DOWN"]},
         }).to_list(length=100)
@@ -89,6 +90,7 @@ async def pending_evaluator_tick():
             await collection.update_many(
                 {
                     "status": "PENDING",
+                    "was_executed": True,
                     "signal_for_close_at": {"$lte": now_iso},
                     "prediction_direction": "NO_TRADE",
                 },
@@ -188,6 +190,7 @@ async def pending_evaluator_tick():
         await collection.update_many(
             {
                 "status": "PENDING",
+                "was_executed": True,
                 "signal_for_close_at": {"$lte": now_iso},
                 "prediction_direction": "NO_TRADE",
             },

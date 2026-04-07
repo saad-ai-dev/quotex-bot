@@ -51,6 +51,87 @@ router = APIRouter(tags=["signals"])
 orchestrator = SignalOrchestrator()
 
 
+def _build_execution_decision(signal_doc: dict) -> tuple[bool, list[str]]:
+    """Apply stricter execution rules than alerting rules.
+
+    The backend may emit an alert for operator visibility, but auto-trading
+    should only be allowed for high-quality, low-ambiguity setups.
+    """
+    blockers: list[str] = []
+
+    direction = signal_doc.get("prediction_direction")
+    confidence = float(signal_doc.get("confidence", 0.0) or 0.0)
+    market_type = str(signal_doc.get("market_type", "LIVE")).upper()
+    candle_count = int(signal_doc.get("candle_count", 0) or 0)
+    penalties = signal_doc.get("penalties", {}) or {}
+    features = signal_doc.get("detected_features", {}) or {}
+
+    expiry_profile = str(signal_doc.get("expiry_profile", "1m")).lower()
+    is_two_minute_plus = expiry_profile in {"2m", "3m"}
+    min_confidence = 56.0 if market_type == "OTC" else 54.0
+    min_candles = 18 if market_type == "OTC" else 16
+    min_score_gap = 6.0 if market_type == "OTC" else 5.0
+    if not is_two_minute_plus:
+        min_confidence += 2.0
+        min_candles += 1
+        min_score_gap += 2.0
+
+    if direction not in ("UP", "DOWN"):
+        blockers.append("non_directional_signal")
+    if confidence < min_confidence:
+        blockers.append(f"confidence_below_{min_confidence:.0f}")
+    if candle_count < min_candles:
+        blockers.append(f"not_enough_candles_{candle_count}")
+
+    chop_probability = float(features.get("chop_probability", 0.0) or 0.0)
+    if chop_probability > 0.62:
+        blockers.append("market_too_choppy")
+
+    agreeing_count = int(features.get("agreeing_detector_count", 0) or 0)
+    min_agreeing_count = 2 if is_two_minute_plus else 3
+    if agreeing_count < min_agreeing_count:
+        blockers.append("low_detector_confluence")
+
+    score_gap = float(features.get("score_gap", 0.0) or 0.0)
+    if score_gap < min_score_gap:
+        blockers.append("score_gap_too_small")
+
+    strategy_name = str(features.get("strategy_name", "none"))
+    regime = str(features.get("regime", "UNKNOWN"))
+    trend_strength = float(features.get("trend_strength", 0.0) or 0.0)
+    recent_range_position = float(features.get("recent_range_position", 0.5) or 0.5)
+    consecutive_up = int(features.get("consecutive_up", 0) or 0)
+    consecutive_down = int(features.get("consecutive_down", 0) or 0)
+
+    if strategy_name == "mean_reversion" and regime == "TRENDING":
+        blockers.append("mean_reversion_against_trend")
+    if strategy_name == "mean_reversion" and trend_strength >= 0.2:
+        blockers.append("trend_strength_too_high_for_reversion")
+    if strategy_name == "pullback_trend":
+        if direction == "UP" and recent_range_position >= 0.88 and consecutive_up >= 2:
+            blockers.append("late_entry_overextended_uptrend")
+        if direction == "DOWN" and recent_range_position <= 0.12 and consecutive_down >= 2:
+            blockers.append("late_entry_overextended_downtrend")
+    if strategy_name == "trend_continuation":
+        if direction == "UP" and recent_range_position >= 0.84 and consecutive_up >= 2:
+            blockers.append("late_entry_overextended_uptrend")
+        if direction == "DOWN" and recent_range_position <= 0.16 and consecutive_down >= 2:
+            blockers.append("late_entry_overextended_downtrend")
+
+    if float(penalties.get("conflict_penalty", 0.0) or 0.0) > (6.5 if is_two_minute_plus else 5.0):
+        blockers.append("signal_conflict_penalty")
+    if float(penalties.get("weak_data_penalty", 0.0) or 0.0) > (1.5 if is_two_minute_plus else 0.5):
+        blockers.append("weak_data_penalty")
+    if float(penalties.get("parsing_quality_penalty", 0.0) or 0.0) > 0.0:
+        blockers.append("parsing_quality_penalty")
+    if float(penalties.get("chop_penalty", 0.0) or 0.0) > 2.0:
+        blockers.append("chop_penalty")
+    if float(penalties.get("low_confluence_penalty", 0.0) or 0.0) > 0.0:
+        blockers.append("low_confluence_penalty")
+
+    return len(blockers) == 0, blockers
+
+
 # ------------------------------------------------------------------
 # Pydantic models for request/response validation
 # ------------------------------------------------------------------
@@ -88,6 +169,12 @@ class EvaluatePayload(BaseModel):
         default=None,
         description="WIN, LOSS, NEUTRAL, or UNKNOWN. Auto-calculated if omitted.",
     )
+
+
+class ExecutionPayload(BaseModel):
+    """Payload sent by the extension after a real Quotex click succeeds."""
+    executed_price: Optional[float] = None
+    asset_name: Optional[str] = None
 
 
 # ------------------------------------------------------------------
@@ -186,7 +273,31 @@ async def ingest_signal(
         "outcome": None,
         "actual_close": None,
         "evaluated_at": None,
+        "was_executed": False,
+        "execution_status": "ALERTED" if result.get("prediction_direction") in ("UP", "DOWN") else "NOT_EXECUTED",
+        "executed_at": None,
+        "executed_price": None,
     }
+
+    execution_ready, execution_blockers = _build_execution_decision(signal_doc)
+    signal_doc["execution_ready"] = execution_ready
+    signal_doc["execution_blockers"] = execution_blockers
+
+    if signal_doc["prediction_direction"] in ("UP", "DOWN") and not execution_ready:
+        blocked_direction = signal_doc["prediction_direction"]
+        signal_doc["blocked_direction"] = blocked_direction
+        signal_doc["prediction_direction"] = "NO_TRADE"
+        signal_doc["status"] = "BLOCKED"
+        signal_doc["reasons"] = [
+            f"Execution blocked: {', '.join(execution_blockers)}"
+        ] + signal_doc.get("reasons", [])
+        logger.info(
+            "Signal blocked before alerting: asset=%s direction=%s confidence=%.2f blockers=%s",
+            signal_doc.get("asset_name"),
+            blocked_direction,
+            signal_doc.get("confidence", 0.0),
+            execution_blockers,
+        )
 
     # Sanitize numpy types before MongoDB insertion
     signal_doc = _sanitize(signal_doc)
@@ -218,25 +329,17 @@ async def ingest_signal(
     # Remove Mongo internal _id before returning
     signal_doc.pop("_id", None)
 
-    logger.info(
-        "Signal ingested: %s direction=%s confidence=%.2f bull=%.1f bear=%.1f candles=%d penalties=%s",
-        signal_doc["signal_id"],
-        signal_doc["prediction_direction"],
-        signal_doc["confidence"],
-        signal_doc.get("bullish_score", 0),
-        signal_doc.get("bearish_score", 0),
-        signal_doc.get("candle_count", 0),
-        signal_doc.get("penalties", {}),
-    )
-
-    # Broadcast to WebSocket clients for live dashboard updates
-    try:
-        from app.api.routes.websocket import manager
-        import json
-        event = {"event_type": "new_alert", "signal": signal_doc}
-        await manager.broadcast(json.dumps(event, default=str))
-    except Exception:
-        pass  # Non-critical: dashboard will poll anyway
+    if signal_doc["prediction_direction"] in ("UP", "DOWN"):
+        logger.info(
+            "Signal ingested: %s direction=%s confidence=%.2f bull=%.1f bear=%.1f candles=%d penalties=%s",
+            signal_doc["signal_id"],
+            signal_doc["prediction_direction"],
+            signal_doc["confidence"],
+            signal_doc.get("bullish_score", 0),
+            signal_doc.get("bearish_score", 0),
+            signal_doc.get("candle_count", 0),
+            signal_doc.get("penalties", {}),
+        )
 
     return signal_doc
 
@@ -248,6 +351,7 @@ async def list_signals(
     status: Optional[str] = Query(None, description="PENDING or EVALUATED"),
     outcome: Optional[str] = Query(None, description="WIN, LOSS"),
     directional_only: bool = Query(False, description="Only show UP/DOWN signals"),
+    executed_only: bool = Query(False, description="Only show trades actually executed on Quotex"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -268,6 +372,8 @@ async def list_signals(
         query["outcome"] = outcome.upper()
     if directional_only:
         query["prediction_direction"] = {"$in": ["UP", "DOWN"]}
+    if executed_only:
+        query["was_executed"] = True
 
     collection = db["signals"]
     cursor = collection.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit)
@@ -281,6 +387,62 @@ async def list_signals(
         "skip": skip,
         "limit": limit,
     }
+
+
+@router.post("/{signal_id}/executed")
+async def mark_signal_executed(
+    signal_id: str,
+    payload: ExecutionPayload,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Mark a signal as actually executed on Quotex.
+
+    This is the source of truth for dashboard trade history alignment.
+    """
+    collection = db["signals"]
+    doc = await collection.find_one({"signal_id": signal_id}, {"_id": 0})
+
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"Signal {signal_id} not found")
+
+    if doc.get("prediction_direction") not in ("UP", "DOWN"):
+        raise HTTPException(status_code=400, detail="Only directional signals can be marked executed")
+
+    if doc.get("was_executed"):
+        return doc
+
+    now = now_utc()
+    executed_price = payload.executed_price
+    update_fields = {
+        "was_executed": True,
+        "execution_status": "EXECUTED",
+        "executed_at": format_timestamp(now),
+    }
+    if executed_price is not None:
+        update_fields["executed_price"] = float(executed_price)
+        update_fields["entry_price"] = float(executed_price)
+    if payload.asset_name:
+        update_fields["asset_name"] = payload.asset_name
+
+    await collection.update_one({"signal_id": signal_id}, {"$set": update_fields})
+    updated = await collection.find_one({"signal_id": signal_id}, {"_id": 0})
+
+    logger.info(
+        "Signal executed on Quotex: %s asset=%s direction=%s",
+        signal_id,
+        updated.get("asset_name"),
+        updated.get("prediction_direction"),
+    )
+
+    try:
+        from app.api.routes.websocket import manager
+        import json
+        event = {"event_type": "new_alert", "signal": updated}
+        await manager.broadcast(json.dumps(event, default=str))
+    except Exception:
+        pass
+
+    return updated
 
 
 @router.get("/{signal_id}")

@@ -109,7 +109,7 @@ class SignalOrchestrator:
 
             direction = scores["prediction_direction"]
             reasons = self._build_reasons(detector_results, direction)
-            detected_features = self._build_detected_features(detector_results)
+            detected_features = self._build_detected_features(detector_results, scores)
 
             return {
                 "bullish_score": scores["bullish_score"],
@@ -351,6 +351,7 @@ class SignalOrchestrator:
         - High selectivity — skip ambiguous setups.
         """
         if len(candles) < 8:
+            scores.setdefault("execution_context", {})
             return scores
 
         import numpy as np
@@ -372,6 +373,14 @@ class SignalOrchestrator:
         full_bull = int(np.sum(closes > opens))
         full_bear = int(np.sum(closes < opens))
         trend_strength = abs(full_bull - full_bear) / total
+        recent_window = min(12, total)
+        recent_high = float(np.max(closes[-recent_window:]))
+        recent_low = float(np.min(closes[-recent_window:]))
+        recent_range = recent_high - recent_low
+        if recent_range > 0:
+            recent_range_position = (float(closes[-1]) - recent_low) / recent_range
+        else:
+            recent_range_position = 0.5
 
         # Candle direction sequence (True=bullish, False=bearish, None=doji)
         directions = []
@@ -446,6 +455,8 @@ class SignalOrchestrator:
 
         signal_direction = "NO_TRADE"
         signal_reason = ""
+        strategy_name = "none"
+        regime = "RANGING"
         bull_score = scores["bullish_score"]
         bear_score = scores["bearish_score"]
         confidence = scores["confidence"]
@@ -465,6 +476,7 @@ class SignalOrchestrator:
         # is WITH the trend = the pullback is over, trend resumes.
         # ================================================================
         if is_trending:
+            regime = "TRENDING"
             if trend == "DOWN" and last_bearish and prev_bullish:
                 # Pullback (prev=bull) ended, trend (last=bear) resumed
                 bear_score = min(100, bear_score + 25)
@@ -472,6 +484,7 @@ class SignalOrchestrator:
                 confidence = min(100, 50 + trend_strength * 25 + min(range_pct, 0.5) * 10)
                 signal_direction = "DOWN"
                 signal_reason = f"pullback_entry_down (str={trend_strength:.2f})"
+                strategy_name = "pullback_trend"
 
             elif trend == "UP" and last_bullish and prev_bearish:
                 bull_score = min(100, bull_score + 25)
@@ -479,22 +492,55 @@ class SignalOrchestrator:
                 confidence = min(100, 50 + trend_strength * 25 + min(range_pct, 0.5) * 10)
                 signal_direction = "UP"
                 signal_reason = f"pullback_entry_up (str={trend_strength:.2f})"
+                strategy_name = "pullback_trend"
 
         # ================================================================
         # STRATEGY 1b: TREND FOLLOWING (no pullback needed)
-        # If the trend is strong and EMA gap is clear, follow the trend.
-        # Less selective than pullback entry — fires when trend exists
-        # but no clean pullback has formed.
+        # Controlled continuation entry for strong trends that are not yet
+        # overextended. This increases trade frequency without buying/selling
+        # the absolute edge of the move.
         # ================================================================
-        # Trend following DISABLED — data shows 50% accuracy (coin flip).
-        # Mean reversion is significantly more accurate for OTC markets.
-        # Only pullback entries remain as trend-based strategy.
+        if signal_direction == "NO_TRADE" and is_trending:
+            ema_gap_pct = abs(ema_fast - ema_slow) / avg_price * 100 if avg_price > 0 else 0.0
+            not_overextended_up = recent_range_position <= 0.82 and consecutive_up <= 2
+            not_overextended_down = recent_range_position >= 0.18 and consecutive_down <= 2
+
+            if (
+                trend == "UP"
+                and last_bullish
+                and trend_strength >= 0.18
+                and ema_gap_pct >= 0.02
+                and not_overextended_up
+            ):
+                bull_score = min(100, bull_score + 14)
+                bear_score = max(0, bear_score - 8)
+                confidence = min(100, max(confidence, 52 + trend_strength * 20))
+                signal_direction = "UP"
+                signal_reason = f"continuation_up (str={trend_strength:.2f}, gap={ema_gap_pct:.3f}%)"
+                strategy_name = "trend_continuation"
+
+            elif (
+                trend == "DOWN"
+                and last_bearish
+                and trend_strength >= 0.18
+                and ema_gap_pct >= 0.02
+                and not_overextended_down
+            ):
+                bear_score = min(100, bear_score + 14)
+                bull_score = max(0, bull_score - 8)
+                confidence = min(100, max(confidence, 52 + trend_strength * 20))
+                signal_direction = "DOWN"
+                signal_reason = f"continuation_down (str={trend_strength:.2f}, gap={ema_gap_pct:.3f}%)"
+                strategy_name = "trend_continuation"
 
         # ================================================================
         # STRATEGY 2: MEAN REVERSION — after 2-3 moves in one direction,
         # predict REVERSAL. OTC markets tend to bounce back.
         # ================================================================
-        if signal_direction == "NO_TRADE" and total >= 4:
+        if is_alternating and not is_trending:
+            regime = "ALTERNATING"
+
+        if signal_direction == "NO_TRADE" and total >= 4 and not is_trending:
             last_moves = []
             for i in range(-3, 0):
                 if total + i >= 1:
@@ -515,12 +561,14 @@ class SignalOrchestrator:
                         bear_score = min(100, bear_score + 18)
                         confidence = min(100, 52 + move_pct * 200)
                         signal_reason = f"revert_after_3up (move={move_pct:.4f}%)"
+                        strategy_name = "mean_reversion"
                     # After 3 DOWN moves → predict UP (reversal)
                     elif all_down and move_pct > 0.003:
                         signal_direction = "UP"
                         bull_score = min(100, bull_score + 18)
                         confidence = min(100, 52 + move_pct * 200)
                         signal_reason = f"revert_after_3down (move={move_pct:.4f}%)"
+                        strategy_name = "mean_reversion"
 
                 # 2-move reversal (weaker, needs bigger move)
                 if signal_direction == "NO_TRADE":
@@ -535,11 +583,13 @@ class SignalOrchestrator:
                         bear_score = min(100, bear_score + 12)
                         confidence = min(100, 48 + move_pct_2 * 150)
                         signal_reason = f"revert_after_2up (move={move_pct_2:.4f}%)"
+                        strategy_name = "mean_reversion"
                     elif both_down and move_pct_2 > 0.01:
                         signal_direction = "UP"
                         bull_score = min(100, bull_score + 12)
                         confidence = min(100, 48 + move_pct_2 * 150)
                         signal_reason = f"revert_after_2down (move={move_pct_2:.4f}%)"
+                        strategy_name = "mean_reversion"
 
             if last_moves:
                 moves_str = ", ".join(f"{m:+.6f}" for m in last_moves)
@@ -555,6 +605,19 @@ class SignalOrchestrator:
         scores["bearish_score"] = round(bear_score, 2)
         scores["confidence"] = round(max(0, min(100, confidence)), 2)
         scores["prediction_direction"] = signal_direction
+        scores["execution_context"] = {
+            "regime": regime,
+            "trend": trend,
+            "trend_strength": round(trend_strength, 4),
+            "alternation_ratio": round(alternation_ratio, 4),
+            "range_pct": round(range_pct, 5),
+            "recent_range_position": round(recent_range_position, 4),
+            "strategy_name": strategy_name,
+            "is_trending": is_trending,
+            "is_alternating": is_alternating,
+            "consecutive_up": consecutive_up,
+            "consecutive_down": consecutive_down,
+        }
 
         if signal_reason:
             logger.info(">>> SIGNAL: %s conf=%.1f", signal_reason, confidence)
@@ -694,7 +757,7 @@ class SignalOrchestrator:
         return reasons
 
     def _build_detected_features(
-        self, detector_results: Dict[str, Any]
+        self, detector_results: Dict[str, Any], scores: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Build a summary dict of all detected features across detectors."""
         features: Dict[str, Any] = {}
@@ -759,5 +822,18 @@ class SignalOrchestrator:
         meta = detector_results.get("_meta", {})
         features["candle_count"] = meta.get("candle_count", 0)
         features["parse_mode"] = meta.get("parse_mode", "unknown")
+
+        execution_context = scores.get("execution_context", {})
+        features["regime"] = execution_context.get("regime", "UNKNOWN")
+        features["strategy_name"] = execution_context.get("strategy_name", "none")
+        features["trend"] = execution_context.get("trend", "NONE")
+        features["trend_strength"] = execution_context.get("trend_strength", 0.0)
+        features["alternation_ratio"] = execution_context.get("alternation_ratio", 0.0)
+        features["range_pct"] = execution_context.get("range_pct", 0.0)
+        features["recent_range_position"] = execution_context.get("recent_range_position", 0.5)
+        features["consecutive_up"] = execution_context.get("consecutive_up", 0)
+        features["consecutive_down"] = execution_context.get("consecutive_down", 0)
+        features["agreeing_detector_count"] = scores.get("agreeing_count", 0)
+        features["score_gap"] = scores.get("score_gap", 0.0)
 
         return features
