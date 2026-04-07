@@ -11,6 +11,12 @@ export class PriceCollector {
   private candles: CandleData[] = [];
   private currentCandle: CandleData | null = null;
   private candleStartTime: number = 0;
+  private _onCandleClose: (() => void) | null = null;
+
+  /** Register a callback that fires when a candle closes (minute boundary crossed). */
+  onCandleClose(cb: () => void): void {
+    this._onCandleClose = cb;
+  }
 
   /**
    * Called every ~1 second with the current price.
@@ -23,6 +29,7 @@ export class PriceCollector {
 
     if (this.currentCandle === null || minuteStart !== this.candleStartTime) {
       // Close previous candle if it exists
+      const hadPreviousCandle = this.currentCandle !== null;
       if (this.currentCandle !== null) {
         this.candles.push({ ...this.currentCandle });
       }
@@ -36,6 +43,12 @@ export class PriceCollector {
         close: price,
         timestamp: minuteStart / 1000, // seconds as float
       };
+
+      // Fire candle-close callback — the best moment to send data to backend
+      // because all candles are now finalized (no incomplete data).
+      if (hadPreviousCandle && this._onCandleClose) {
+        this._onCandleClose();
+      }
     } else {
       // Update current candle
       this.currentCandle.high = Math.max(this.currentCandle.high, price);

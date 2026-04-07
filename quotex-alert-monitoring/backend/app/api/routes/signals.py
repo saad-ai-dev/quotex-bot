@@ -494,18 +494,18 @@ async def evaluate_signal(
     if payload.outcome:
         outcome = payload.outcome.upper()
     else:
-        # Auto-calculate based on direction vs actual close
+        # Auto-calculate based on direction vs actual close vs entry price
         direction = doc.get("prediction_direction", "NO_TRADE")
-        # Compare actual close against the last candle close (entry reference)
-        entry_close = None
-        if doc.get("detected_features", {}).get("candle_count", 0) > 0:
-            # We don't store the raw entry price by default; use bullish/bearish logic
-            pass
+        entry_price = doc.get("entry_price")
 
-        if direction == "UP":
-            outcome = "WIN" if payload.actual_close > 0 else "LOSS"
-        elif direction == "DOWN":
-            outcome = "WIN" if payload.actual_close < 0 else "LOSS"
+        if direction in ("UP", "DOWN") and entry_price is not None and entry_price > 0:
+            if direction == "UP":
+                outcome = "WIN" if payload.actual_close > entry_price else "LOSS"
+            else:
+                outcome = "WIN" if payload.actual_close < entry_price else "LOSS"
+        elif direction in ("UP", "DOWN"):
+            # No entry price stored — mark as UNKNOWN rather than guessing
+            outcome = "UNKNOWN"
         else:
             outcome = "NEUTRAL"
 

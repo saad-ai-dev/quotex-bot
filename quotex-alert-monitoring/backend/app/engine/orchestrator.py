@@ -436,7 +436,7 @@ class SignalOrchestrator:
         elif price_change < 0 and full_bear >= full_bull + 3:
             trend = "DOWN"
 
-        is_trending = trend != "NONE" and trend_strength >= 0.10
+        is_trending = trend != "NONE" and trend_strength >= 0.20
 
         # Consecutive candles from the end
         consecutive_up = 0
@@ -477,7 +477,13 @@ class SignalOrchestrator:
         # ================================================================
         if is_trending:
             regime = "TRENDING"
-            if trend == "DOWN" and last_bearish and prev_bullish:
+            # Pullback confirmation: the resumption candle (last) should have a
+            # body at least as large as the pullback candle (prev) to confirm
+            # the pullback is over and the trend is resuming.
+            last_body = abs(last["close"] - last["open"])
+            prev_body = abs(prev["close"] - prev["open"]) if prev else 0
+
+            if trend == "DOWN" and last_bearish and prev_bullish and last_body >= prev_body * 0.8:
                 # Pullback (prev=bull) ended, trend (last=bear) resumed
                 bear_score = min(100, bear_score + 25)
                 bull_score = max(0, bull_score - 15)
@@ -486,7 +492,7 @@ class SignalOrchestrator:
                 signal_reason = f"pullback_entry_down (str={trend_strength:.2f})"
                 strategy_name = "pullback_trend"
 
-            elif trend == "UP" and last_bullish and prev_bearish:
+            elif trend == "UP" and last_bullish and prev_bearish and last_body >= prev_body * 0.8:
                 bull_score = min(100, bull_score + 25)
                 bear_score = max(0, bear_score - 15)
                 confidence = min(100, 50 + trend_strength * 25 + min(range_pct, 0.5) * 10)
@@ -502,8 +508,8 @@ class SignalOrchestrator:
         # ================================================================
         if signal_direction == "NO_TRADE" and is_trending:
             ema_gap_pct = abs(ema_fast - ema_slow) / avg_price * 100 if avg_price > 0 else 0.0
-            not_overextended_up = recent_range_position <= 0.82 and consecutive_up <= 2
-            not_overextended_down = recent_range_position >= 0.18 and consecutive_down <= 2
+            not_overextended_up = recent_range_position <= 0.72 and consecutive_up <= 2
+            not_overextended_down = recent_range_position >= 0.28 and consecutive_down <= 2
 
             if (
                 trend == "UP"
@@ -549,6 +555,7 @@ class SignalOrchestrator:
 
             if len(last_moves) >= 2:
                 # 3-move reversal (strongest signal)
+                # Require a meaningful move (>= ~2 pips on majors) to avoid trading on noise
                 if len(last_moves) == 3:
                     all_up = all(m > 0 for m in last_moves)
                     all_down = all(m < 0 for m in last_moves)
@@ -556,21 +563,21 @@ class SignalOrchestrator:
                     move_pct = abs(total_move) / avg_price * 100 if avg_price > 0 else 0
 
                     # After 3 UP moves → predict DOWN (reversal)
-                    if all_up and move_pct > 0.003:
+                    if all_up and move_pct > 0.02:
                         signal_direction = "DOWN"
                         bear_score = min(100, bear_score + 18)
-                        confidence = min(100, 52 + move_pct * 200)
+                        confidence = min(100, 52 + move_pct * 50)
                         signal_reason = f"revert_after_3up (move={move_pct:.4f}%)"
                         strategy_name = "mean_reversion"
                     # After 3 DOWN moves → predict UP (reversal)
-                    elif all_down and move_pct > 0.003:
+                    elif all_down and move_pct > 0.02:
                         signal_direction = "UP"
                         bull_score = min(100, bull_score + 18)
-                        confidence = min(100, 52 + move_pct * 200)
+                        confidence = min(100, 52 + move_pct * 50)
                         signal_reason = f"revert_after_3down (move={move_pct:.4f}%)"
                         strategy_name = "mean_reversion"
 
-                # 2-move reversal (weaker, needs bigger move)
+                # 2-move reversal (weaker, needs bigger move — >= ~5 pips on majors)
                 if signal_direction == "NO_TRADE":
                     last_2 = last_moves[-2:]
                     both_up = all(m > 0 for m in last_2)
@@ -578,16 +585,16 @@ class SignalOrchestrator:
                     total_2 = sum(last_2)
                     move_pct_2 = abs(total_2) / avg_price * 100 if avg_price > 0 else 0
 
-                    if both_up and move_pct_2 > 0.01:
+                    if both_up and move_pct_2 > 0.05:
                         signal_direction = "DOWN"
                         bear_score = min(100, bear_score + 12)
-                        confidence = min(100, 48 + move_pct_2 * 150)
+                        confidence = min(100, 48 + move_pct_2 * 40)
                         signal_reason = f"revert_after_2up (move={move_pct_2:.4f}%)"
                         strategy_name = "mean_reversion"
-                    elif both_down and move_pct_2 > 0.01:
+                    elif both_down and move_pct_2 > 0.05:
                         signal_direction = "UP"
                         bull_score = min(100, bull_score + 12)
-                        confidence = min(100, 48 + move_pct_2 * 150)
+                        confidence = min(100, 48 + move_pct_2 * 40)
                         signal_reason = f"revert_after_2down (move={move_pct_2:.4f}%)"
                         strategy_name = "mean_reversion"
 

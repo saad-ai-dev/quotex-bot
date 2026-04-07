@@ -32,7 +32,7 @@ let wsAssetName: string | null = null; // Asset name from WebSocket data (most r
 let lastWsPriceAt = 0;
 let lastAssetSwitchAt = 0;
 const MIN_CANDLES_BEFORE_SEND = 18;
-const DOM_FALLBACK_SUPPRESS_MS = 15_000;
+const DOM_FALLBACK_SUPPRESS_MS = 60_000;
 
 // ---- Auto-Trade State ----
 let tradeSettings: TradeSettings = {
@@ -482,6 +482,8 @@ function processWsMessage(raw: string): void {
     parseHistoryData(raw);
   } else if (eventName === "s_chart_notification/get") {
     parseChartNotification(raw);
+  } else if (eventName === "orders/opened/list") {
+    parseOpenedOrderEvents(raw);
   } else if (eventName === "orders/closed/list") {
     parseOrderEvents(raw, eventName);
   } else if (eventName === "instruments/list") {
@@ -570,6 +572,10 @@ function parseHistoryData(raw: string): void {
 }
 
 function parseChartNotification(raw: string): void {
+  // Suppress when we have authoritative WS data flowing — chart notifications
+  // can carry prices from other instruments shown in side panels.
+  if (wsAssetName && Date.now() - lastWsPriceAt < DOM_FALLBACK_SUPPRESS_MS) return;
+
   const cleaned = raw.replace(/^[\x00-\x1f]+/, "");
   try {
     const data = JSON.parse(cleaned);
@@ -577,6 +583,46 @@ function parseChartNotification(raw: string): void {
       for (const item of data) {
         if (item && typeof item.price === "number" && item.price > 0) feedPrice(item.price);
       }
+    }
+  } catch {}
+}
+
+/** Parse opened order events to capture the actual Quotex fill price.
+ *  When Quotex confirms our trade, it sends orders/opened/list with the
+ *  real entry price. We use this to update the backend so evaluation
+ *  compares against the fill price, not the last-candle close. */
+function parseOpenedOrderEvents(raw: string): void {
+  if (!activeTrade) return;
+
+  const cleaned = raw.replace(/^[\x00-\x1f]+/, "");
+  try {
+    const data = JSON.parse(cleaned);
+    if (!Array.isArray(data)) return;
+
+    for (const order of data) {
+      if (!order || typeof order !== "object") continue;
+
+      const asset = normalizeAssetName(String(order.asset ?? order.asset_name ?? order.instrument ?? ""));
+      if (asset && activeTrade.asset && asset !== activeTrade.asset) continue;
+
+      // Quotex sends the fill price as "open_price", "price", or "entry_price"
+      const fillPrice = order.open_price ?? order.price ?? order.entry_price;
+      if (typeof fillPrice !== "number" || fillPrice <= 0) continue;
+
+      console.log(`[AutoTrade] Captured fill price from orders/opened/list: ${fillPrice} for ${asset}`);
+
+      // Re-notify backend with the authoritative fill price
+      if (activeTrade.signalId) {
+        fetch(`${BACKEND_URL}/api/signals/${activeTrade.signalId}/executed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            executed_price: fillPrice,
+            asset_name: asset,
+          }),
+        }).catch(() => {});
+      }
+      return;
     }
   } catch {}
 }
@@ -622,6 +668,10 @@ function parseOrderEvents(raw: string, eventName: string): void {
 }
 
 function tryGenericParse(raw: string, _eventName: string | null): void {
+  // Suppress when we have authoritative WS data flowing — generic events
+  // from unrecognised channels may carry prices for other instruments.
+  if (wsAssetName && Date.now() - lastWsPriceAt < DOM_FALLBACK_SUPPRESS_MS) return;
+
   const cleaned = raw.replace(/^[\x00-\x1f]+/, "");
   try {
     const data = JSON.parse(cleaned);
@@ -736,10 +786,10 @@ async function sendCandles(): Promise<void> {
   for (const c of rtCandles) {
     if (!candles.some(h => h.timestamp === c.timestamp)) candles.push(c);
   }
-  const current = priceCollector.getCurrentCandle();
-  if (current && !candles.some(h => h.timestamp === current.timestamp)) {
-    candles.push({ ...current });
-  }
+  // NOTE: Do NOT include the current (incomplete) candle in signal analysis.
+  // The orchestrator's strategy decisions depend on the last candle's direction,
+  // and an incomplete candle's OHLC will change before it closes.
+  // We still use lastPrice for the price cache (current_price field).
   candles.sort((a, b) => a.timestamp - b.timestamp);
   candles = candles.slice(-CANDLES_TO_SEND);
 
@@ -866,6 +916,14 @@ function startMonitoring(): void {
   console.log("[AlertMonitor] Starting monitoring");
 
   priceCollector = new PriceCollector();
+  // Trigger immediate analysis when a candle closes — this is the optimal
+  // moment because all candles in the array are finalized (no incomplete data).
+  priceCollector.onCandleClose(() => {
+    if (monitoring) {
+      console.log("[AlertMonitor] Candle closed, triggering immediate analysis");
+      sendCandles();
+    }
+  });
   overlay?.setStatus("Active");
 
   domScanTimer = setInterval(() => {
