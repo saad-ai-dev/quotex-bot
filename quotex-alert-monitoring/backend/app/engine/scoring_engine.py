@@ -82,12 +82,19 @@ class ScoringEngine:
         bearish_score = max(0.0, min(100.0, bearish_score))
 
         # Compute penalties
+        agreeing_count = self._count_agreeing_detectors(
+            bullish_score=bullish_score,
+            bearish_score=bearish_score,
+            detector_results=detector_results,
+        )
+
         penalties = self._compute_penalties(
             bullish_score=bullish_score,
             bearish_score=bearish_score,
             detector_results=detector_results,
             candle_count=candle_count,
             chart_read_confidence=chart_read_confidence,
+            agreeing_count=agreeing_count,
         )
 
         total_penalty = sum(penalties.values())
@@ -113,6 +120,8 @@ class ScoringEngine:
             "confidence": confidence,
             "prediction_direction": direction,
             "penalties": penalties,
+            "agreeing_count": agreeing_count,
+            "score_gap": round(abs_diff, 2),
         }
 
     def _compute_raw_scores(
@@ -151,6 +160,7 @@ class ScoringEngine:
         detector_results: Dict[str, Any],
         candle_count: int,
         chart_read_confidence: float,
+        agreeing_count: int,
     ) -> Dict[str, float]:
         """Compute all penalty values that reduce confidence.
 
@@ -173,18 +183,6 @@ class ScoringEngine:
             penalties["chop_penalty"] = round(chop_penalty, 2)
 
         # Low confluence penalty: need at least 2 detectors agreeing
-        dominant_dir = "bull" if bullish_score >= bearish_score else "bear"
-        agreeing_count = 0
-        for cat in self._weights:
-            r = detector_results.get(cat, {})
-            if not isinstance(r, dict) or "error" in r:
-                continue
-            bc = float(r.get("bullish_contribution", 0))
-            brc = float(r.get("bearish_contribution", 0))
-            if dominant_dir == "bull" and bc > brc + 0.5:
-                agreeing_count += 1
-            elif dominant_dir == "bear" and brc > bc + 0.5:
-                agreeing_count += 1
         if agreeing_count < 2:
             penalties["low_confluence_penalty"] = round((2 - agreeing_count) * 8.0, 2)
 
@@ -207,6 +205,31 @@ class ScoringEngine:
             penalties["timing_reliability_penalty"] = round(timing_penalty, 2)
 
         return penalties
+
+    def _count_agreeing_detectors(
+        self,
+        bullish_score: float,
+        bearish_score: float,
+        detector_results: Dict[str, Any],
+    ) -> int:
+        """Count detectors that clearly support the dominant side."""
+        dominant_dir = "bull" if bullish_score >= bearish_score else "bear"
+        agreeing_count = 0
+
+        for cat in self._weights:
+            r = detector_results.get(cat, {})
+            if not isinstance(r, dict) or "error" in r:
+                continue
+
+            bull_contrib = float(r.get("bullish_contribution", 0))
+            bear_contrib = float(r.get("bearish_contribution", 0))
+
+            if dominant_dir == "bull" and bull_contrib > bear_contrib + 0.5:
+                agreeing_count += 1
+            elif dominant_dir == "bear" and bear_contrib > bull_contrib + 0.5:
+                agreeing_count += 1
+
+        return agreeing_count
 
     def _determine_direction(
         self, bullish_score: float, bearish_score: float, confidence: float

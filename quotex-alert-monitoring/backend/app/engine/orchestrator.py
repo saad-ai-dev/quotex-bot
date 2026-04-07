@@ -74,6 +74,25 @@ class SignalOrchestrator:
             Complete signal data dict ready for DB storage.
         """
         try:
+            # Sanity check: reject mixed-asset candle data
+            # All close prices should be within 50% of the median
+            if len(candles) >= 3:
+                close_vals = [c["close"] for c in candles]
+                median_close = sorted(close_vals)[len(close_vals) // 2]
+                if median_close > 0:
+                    outliers = sum(1 for v in close_vals if abs(v - median_close) / median_close > 0.5)
+                    if outliers > len(candles) * 0.2:
+                        logger.warning("Candle data looks corrupted (mixed assets?): %d/%d outliers", outliers, len(candles))
+                        return {
+                            "bullish_score": 0.0, "bearish_score": 0.0, "confidence": 0.0,
+                            "prediction_direction": "NO_TRADE",
+                            "reasons": ["Candle data appears corrupted (mixed assets)"],
+                            "detected_features": {}, "penalties": {},
+                            "market_type": market_type, "expiry_profile": expiry_profile,
+                            "parse_mode": parse_mode, "chart_read_confidence": chart_read_confidence,
+                            "candle_count": len(candles), "detector_results_raw": {},
+                        }
+
             profile_config = self._load_profile(market_type, expiry_profile)
             detector_results = self._run_detectors(candles, market_type)
             detector_results["_meta"] = {
@@ -90,7 +109,7 @@ class SignalOrchestrator:
 
             direction = scores["prediction_direction"]
             reasons = self._build_reasons(detector_results, direction)
-            detected_features = self._build_detected_features(detector_results)
+            detected_features = self._build_detected_features(detector_results, scores)
 
             return {
                 "bullish_score": scores["bullish_score"],
@@ -320,38 +339,106 @@ class SignalOrchestrator:
         return normalized
 
     def _apply_trend_analysis(self, candles: List[Dict[str, Any]], scores: Dict[str, Any]) -> Dict[str, Any]:
-        """Primary signal generator using direct price action analysis.
+        """Primary signal generator — adaptive strategy for LIVE and OTC.
 
-        This method OVERRIDES detector-based scores when price action gives
-        a clear signal. For 1-minute binary options, direct momentum and
-        reversal detection outperform pattern-based detectors.
+        Detects market regime and applies the right strategy:
+        1. TRENDING: Pullback entry in dominant trend direction.
+        2. ALTERNATING (OTC): Follow the alternation pattern.
+        3. FLAT/CHOPPY: NO_TRADE — sit out.
 
-        Strategies:
-        1. MEAN REVERSION: After 3+ consecutive candles in one direction,
-           predict reversal (the strongest OTC signal).
-        2. MOMENTUM CONTINUATION: Strong trend with pullback = continuation.
-        3. ENGULFING REVERSAL: Large reversal candle after trend = direction change.
-        4. NO_TRADE: When signals are ambiguous, skip.
+        Rules:
+        - Only ONE direction per signal. Never contradictory.
+        - High selectivity — skip ambiguous setups.
         """
-        if len(candles) < 5:
+        if len(candles) < 8:
+            scores.setdefault("execution_context", {})
             return scores
 
         import numpy as np
         closes = np.array([c["close"] for c in candles])
         opens = np.array([c["open"] for c in candles])
-        highs = np.array([c["high"] for c in candles])
-        lows = np.array([c["low"] for c in candles])
 
         total = len(candles)
+
+        # ================================================================
+        # METRICS
+        # ================================================================
+        ema_fast = float(np.mean(closes[-4:]))
+        ema_slow = float(np.mean(closes[-10:])) if total >= 10 else float(np.mean(closes))
+        price_change = float(closes[-1]) - float(closes[0])
+        price_range = float(np.max(closes) - np.min(closes))
+        avg_price = float(np.mean(closes))
+        range_pct = (price_range / avg_price * 100) if avg_price > 0 else 0
+
+        full_bull = int(np.sum(closes > opens))
+        full_bear = int(np.sum(closes < opens))
+        trend_strength = abs(full_bull - full_bear) / total
+        recent_window = min(12, total)
+        recent_high = float(np.max(closes[-recent_window:]))
+        recent_low = float(np.min(closes[-recent_window:]))
+        recent_range = recent_high - recent_low
+        if recent_range > 0:
+            recent_range_position = (float(closes[-1]) - recent_low) / recent_range
+        else:
+            recent_range_position = 0.5
+
+        # Candle direction sequence (True=bullish, False=bearish, None=doji)
+        directions = []
+        for c in candles:
+            if c["close"] > c["open"]:
+                directions.append(True)
+            elif c["close"] < c["open"]:
+                directions.append(False)
+            else:
+                directions.append(None)
+
         last = candles[-1]
-        last_body = abs(last["close"] - last["open"])
-        last_range = last["high"] - last["low"]
+        prev = candles[-2] if total >= 2 else None
         last_bullish = last["close"] > last["open"]
         last_bearish = last["close"] < last["open"]
+        prev_bullish = prev["close"] > prev["open"] if prev else False
+        prev_bearish = prev["close"] < prev["open"] if prev else False
 
-        # --- Compute key metrics ---
+        # ================================================================
+        # VOLATILITY FILTER — skip dead/flat markets
+        # ================================================================
+        min_range_pct = 0.005  # Very low threshold — only skip truly dead markets
+        if range_pct < min_range_pct:
+            scores["prediction_direction"] = "NO_TRADE"
+            return scores
 
-        # Consecutive candles in same direction (from most recent)
+        # ================================================================
+        # REGIME DETECTION
+        # ================================================================
+
+        # Check for ALTERNATING pattern in last 6 candles
+        # Pattern: the last 6 candles alternate direction (UDUDUD or DUDUDU)
+        recent_dirs = [d for d in directions[-6:] if d is not None]
+        alternating_count = 0
+        if len(recent_dirs) >= 4:
+            for i in range(1, len(recent_dirs)):
+                if recent_dirs[i] != recent_dirs[i - 1]:
+                    alternating_count += 1
+            alternation_ratio = alternating_count / (len(recent_dirs) - 1)
+        else:
+            alternation_ratio = 0.0
+
+        is_alternating = alternation_ratio >= 0.60 and len(recent_dirs) >= 4
+
+        # Check for TRENDING
+        trend = "NONE"
+        if ema_fast > ema_slow and price_change > 0 and full_bull > full_bear:
+            trend = "UP"
+        elif ema_fast < ema_slow and price_change < 0 and full_bear > full_bull:
+            trend = "DOWN"
+        elif price_change > 0 and full_bull >= full_bear + 3:
+            trend = "UP"
+        elif price_change < 0 and full_bear >= full_bull + 3:
+            trend = "DOWN"
+
+        is_trending = trend != "NONE" and trend_strength >= 0.10
+
+        # Consecutive candles from the end
         consecutive_up = 0
         consecutive_down = 0
         for c in reversed(candles):
@@ -366,209 +453,174 @@ class SignalOrchestrator:
             else:
                 break
 
-        # Recent candle direction counts (last 5)
-        recent = candles[-5:]
-        recent_bull = sum(1 for c in recent if c["close"] > c["open"])
-        recent_bear = sum(1 for c in recent if c["close"] < c["open"])
-
-        # Average candle body size (for relative comparison)
-        bodies = np.abs(closes - opens)
-        avg_body = float(np.mean(bodies)) if len(bodies) > 0 else 0.0001
-
-        # Price change over all candles
-        price_start = float(closes[0])
-        price_end = float(closes[-1])
-        total_change = price_end - price_start
-
-        # RSI-like calculation (relative strength of up vs down moves)
-        changes = np.diff(closes)
-        gains = np.where(changes > 0, changes, 0)
-        losses = np.where(changes < 0, -changes, 0)
-        avg_gain = float(np.mean(gains)) if len(gains) > 0 else 0
-        avg_loss = float(np.mean(losses)) if len(losses) > 0 else 0.0001
-        rs = avg_gain / avg_loss if avg_loss > 0 else 100
-        rsi = 100 - (100 / (1 + rs))
-
-        # EMA trend
-        ema_short = float(np.mean(closes[-3:])) if len(closes) >= 3 else float(closes[-1])
-        ema_long = float(np.mean(closes[-8:])) if len(closes) >= 8 else float(np.mean(closes))
-        ema_bullish = ema_short > ema_long
-        ema_bearish = ema_short < ema_long
-
-        # Detect engulfing pattern (last candle engulfs previous)
-        engulfing_bull = False
-        engulfing_bear = False
-        if len(candles) >= 2:
-            prev = candles[-2]
-            prev_bearish = prev["close"] < prev["open"]
-            prev_bullish = prev["close"] > prev["open"]
-            if last_bullish and prev_bearish:
-                if last["close"] > prev["open"] and last["open"] < prev["close"]:
-                    if last_body > abs(prev["close"] - prev["open"]) * 0.8:
-                        engulfing_bull = True
-            if last_bearish and prev_bullish:
-                if last["close"] < prev["open"] and last["open"] > prev["close"]:
-                    if last_body > abs(prev["close"] - prev["open"]) * 0.8:
-                        engulfing_bear = True
-
-        # Detect pin bars (long wick rejection)
-        pin_bar_bull = False
-        pin_bar_bear = False
-        if last_range > 0:
-            upper_wick = last["high"] - max(last["open"], last["close"])
-            lower_wick = min(last["open"], last["close"]) - last["low"]
-            if lower_wick > last_body * 2 and lower_wick > upper_wick * 1.5:
-                pin_bar_bull = True  # Long lower wick = rejection of lows
-            if upper_wick > last_body * 2 and upper_wick > lower_wick * 1.5:
-                pin_bar_bear = True  # Long upper wick = rejection of highs
-
-        # --- Signal Decision ---
-        # Start with detector scores as base, then override
+        signal_direction = "NO_TRADE"
+        signal_reason = ""
+        strategy_name = "none"
+        regime = "RANGING"
         bull_score = scores["bullish_score"]
         bear_score = scores["bearish_score"]
         confidence = scores["confidence"]
-        signal_direction = "NO_TRADE"
-        signal_reason = ""
 
-        # Log current state for debugging
         logger.info(
-            "Trend metrics: rsi=%.1f consec_up=%d consec_down=%d recent_bull=%d recent_bear=%d "
-            "ema_bull=%s engulf_bull=%s engulf_bear=%s pin_bull=%s pin_bear=%s "
-            "det_bull=%.1f det_bear=%.1f det_diff=%.1f",
-            rsi, consecutive_up, consecutive_down, recent_bull, recent_bear,
-            ema_bullish, engulfing_bull, engulfing_bear, pin_bar_bull, pin_bar_bear,
-            bull_score, bear_score, abs(bull_score - bear_score),
+            "Regime: trend=%s str=%.2f alt_ratio=%.2f range=%.4f%% "
+            "ema_f=%.5f ema_s=%.5f chg=%.5f bull=%d bear=%d "
+            "consec_up=%d consec_dn=%d last_bull=%s",
+            trend, trend_strength, alternation_ratio, range_pct,
+            ema_fast, ema_slow, price_change, full_bull, full_bear,
+            consecutive_up, consecutive_down, last_bullish,
         )
 
-        # STRATEGY 1: MEAN REVERSION (highest priority for OTC)
-        # After 2+ consecutive candles + RSI confirmation, predict reversal
-        if consecutive_up >= 3 and rsi > 55:
-            reversal_strength = min(consecutive_up, 6) * 8
-            bull_score = max(0, bull_score - reversal_strength)
-            bear_score = min(100, bear_score + reversal_strength)
-            confidence = min(100, 42 + consecutive_up * 7 + max(0, rsi - 55) * 0.5)
-            signal_direction = "DOWN"
-            signal_reason = f"mean_reversion_down (consec_up={consecutive_up}, rsi={rsi:.0f})"
+        # ================================================================
+        # STRATEGY 1: PULLBACK ENTRY in dominant trend (HIGHEST PRIORITY)
+        # Confirmed pullback: prev candle was against trend, last candle
+        # is WITH the trend = the pullback is over, trend resumes.
+        # ================================================================
+        if is_trending:
+            regime = "TRENDING"
+            if trend == "DOWN" and last_bearish and prev_bullish:
+                # Pullback (prev=bull) ended, trend (last=bear) resumed
+                bear_score = min(100, bear_score + 25)
+                bull_score = max(0, bull_score - 15)
+                confidence = min(100, 50 + trend_strength * 25 + min(range_pct, 0.5) * 10)
+                signal_direction = "DOWN"
+                signal_reason = f"pullback_entry_down (str={trend_strength:.2f})"
+                strategy_name = "pullback_trend"
 
-        elif consecutive_down >= 3 and rsi < 45:
-            reversal_strength = min(consecutive_down, 6) * 8
-            bear_score = max(0, bear_score - reversal_strength)
-            bull_score = min(100, bull_score + reversal_strength)
-            confidence = min(100, 42 + consecutive_down * 7 + max(0, 45 - rsi) * 0.5)
-            signal_direction = "UP"
-            signal_reason = f"mean_reversion_up (consec_down={consecutive_down}, rsi={rsi:.0f})"
+            elif trend == "UP" and last_bullish and prev_bearish:
+                bull_score = min(100, bull_score + 25)
+                bear_score = max(0, bear_score - 15)
+                confidence = min(100, 50 + trend_strength * 25 + min(range_pct, 0.5) * 10)
+                signal_direction = "UP"
+                signal_reason = f"pullback_entry_up (str={trend_strength:.2f})"
+                strategy_name = "pullback_trend"
 
-        # Also trigger mean reversion on 2 consecutive + stronger RSI
-        elif consecutive_up >= 2 and rsi > 65:
-            reversal_strength = min(consecutive_up, 4) * 6
-            bull_score = max(0, bull_score - reversal_strength)
-            bear_score = min(100, bear_score + reversal_strength)
-            confidence = min(100, 40 + (rsi - 65) * 1.5)
-            signal_direction = "DOWN"
-            signal_reason = f"mean_reversion_rsi_down (consec_up={consecutive_up}, rsi={rsi:.0f})"
+        # ================================================================
+        # STRATEGY 1b: TREND FOLLOWING (no pullback needed)
+        # Controlled continuation entry for strong trends that are not yet
+        # overextended. This increases trade frequency without buying/selling
+        # the absolute edge of the move.
+        # ================================================================
+        if signal_direction == "NO_TRADE" and is_trending:
+            ema_gap_pct = abs(ema_fast - ema_slow) / avg_price * 100 if avg_price > 0 else 0.0
+            not_overextended_up = recent_range_position <= 0.82 and consecutive_up <= 2
+            not_overextended_down = recent_range_position >= 0.18 and consecutive_down <= 2
 
-        elif consecutive_down >= 2 and rsi < 35:
-            reversal_strength = min(consecutive_down, 4) * 6
-            bear_score = max(0, bear_score - reversal_strength)
-            bull_score = min(100, bull_score + reversal_strength)
-            confidence = min(100, 40 + (35 - rsi) * 1.5)
-            signal_direction = "UP"
-            signal_reason = f"mean_reversion_rsi_up (consec_down={consecutive_down}, rsi={rsi:.0f})"
+            if (
+                trend == "UP"
+                and last_bullish
+                and trend_strength >= 0.18
+                and ema_gap_pct >= 0.02
+                and not_overextended_up
+            ):
+                bull_score = min(100, bull_score + 14)
+                bear_score = max(0, bear_score - 8)
+                confidence = min(100, max(confidence, 52 + trend_strength * 20))
+                signal_direction = "UP"
+                signal_reason = f"continuation_up (str={trend_strength:.2f}, gap={ema_gap_pct:.3f}%)"
+                strategy_name = "trend_continuation"
 
-        # STRATEGY 2: ENGULFING REVERSAL
-        elif engulfing_bull and (consecutive_down >= 1 or rsi < 45):
-            bull_score = min(100, bull_score + 25)
-            bear_score = max(0, bear_score - 15)
-            confidence = min(100, 48 + (45 - min(rsi, 45)) * 0.5)
-            signal_direction = "UP"
-            signal_reason = "engulfing_bull_reversal"
+            elif (
+                trend == "DOWN"
+                and last_bearish
+                and trend_strength >= 0.18
+                and ema_gap_pct >= 0.02
+                and not_overextended_down
+            ):
+                bear_score = min(100, bear_score + 14)
+                bull_score = max(0, bull_score - 8)
+                confidence = min(100, max(confidence, 52 + trend_strength * 20))
+                signal_direction = "DOWN"
+                signal_reason = f"continuation_down (str={trend_strength:.2f}, gap={ema_gap_pct:.3f}%)"
+                strategy_name = "trend_continuation"
 
-        elif engulfing_bear and (consecutive_up >= 1 or rsi > 55):
-            bear_score = min(100, bear_score + 25)
-            bull_score = max(0, bull_score - 15)
-            confidence = min(100, 48 + (max(rsi, 55) - 55) * 0.5)
-            signal_direction = "DOWN"
-            signal_reason = "engulfing_bear_reversal"
+        # ================================================================
+        # STRATEGY 2: MEAN REVERSION — after 2-3 moves in one direction,
+        # predict REVERSAL. OTC markets tend to bounce back.
+        # ================================================================
+        if is_alternating and not is_trending:
+            regime = "ALTERNATING"
 
-        # STRATEGY 3: PIN BAR REJECTION
-        elif pin_bar_bull and rsi < 50:
-            bull_score = min(100, bull_score + 20)
-            bear_score = max(0, bear_score - 10)
-            confidence = min(100, 42 + (50 - rsi) * 0.5)
-            signal_direction = "UP"
-            signal_reason = "pin_bar_bull_rejection"
+        if signal_direction == "NO_TRADE" and total >= 4 and not is_trending:
+            last_moves = []
+            for i in range(-3, 0):
+                if total + i >= 1:
+                    move = float(closes[i]) - float(closes[i - 1])
+                    last_moves.append(move)
 
-        elif pin_bar_bear and rsi > 50:
-            bear_score = min(100, bear_score + 20)
-            bull_score = max(0, bull_score - 10)
-            confidence = min(100, 42 + (rsi - 50) * 0.5)
-            signal_direction = "DOWN"
-            signal_reason = "pin_bar_bear_rejection"
+            if len(last_moves) >= 2:
+                # 3-move reversal (strongest signal)
+                if len(last_moves) == 3:
+                    all_up = all(m > 0 for m in last_moves)
+                    all_down = all(m < 0 for m in last_moves)
+                    total_move = sum(last_moves)
+                    move_pct = abs(total_move) / avg_price * 100 if avg_price > 0 else 0
 
-        # STRATEGY 4: MOMENTUM CONTINUATION
-        # 3+ of last 5 candles in same direction + EMA confirms
-        elif recent_bull >= 3 and ema_bullish and 40 < rsi < 65 and last_bullish:
-            bull_score = min(100, bull_score + 12)
-            confidence = min(100, 40 + recent_bull * 5)
-            signal_direction = "UP"
-            signal_reason = f"momentum_continuation_up (recent_bull={recent_bull})"
+                    # After 3 UP moves → predict DOWN (reversal)
+                    if all_up and move_pct > 0.003:
+                        signal_direction = "DOWN"
+                        bear_score = min(100, bear_score + 18)
+                        confidence = min(100, 52 + move_pct * 200)
+                        signal_reason = f"revert_after_3up (move={move_pct:.4f}%)"
+                        strategy_name = "mean_reversion"
+                    # After 3 DOWN moves → predict UP (reversal)
+                    elif all_down and move_pct > 0.003:
+                        signal_direction = "UP"
+                        bull_score = min(100, bull_score + 18)
+                        confidence = min(100, 52 + move_pct * 200)
+                        signal_reason = f"revert_after_3down (move={move_pct:.4f}%)"
+                        strategy_name = "mean_reversion"
 
-        elif recent_bear >= 3 and ema_bearish and 35 < rsi < 60 and last_bearish:
-            bear_score = min(100, bear_score + 12)
-            confidence = min(100, 40 + recent_bear * 5)
-            signal_direction = "DOWN"
-            signal_reason = f"momentum_continuation_down (recent_bear={recent_bear})"
+                # 2-move reversal (weaker, needs bigger move)
+                if signal_direction == "NO_TRADE":
+                    last_2 = last_moves[-2:]
+                    both_up = all(m > 0 for m in last_2)
+                    both_down = all(m < 0 for m in last_2)
+                    total_2 = sum(last_2)
+                    move_pct_2 = abs(total_2) / avg_price * 100 if avg_price > 0 else 0
 
-        # STRATEGY 5: DETECTOR CONSENSUS with price action filter
-        # Use detector scores when they show clear direction and price agrees
-        else:
-            det_bull = scores["bullish_score"]
-            det_bear = scores["bearish_score"]
-            det_diff = abs(det_bull - det_bear)
+                    if both_up and move_pct_2 > 0.01:
+                        signal_direction = "DOWN"
+                        bear_score = min(100, bear_score + 12)
+                        confidence = min(100, 48 + move_pct_2 * 150)
+                        signal_reason = f"revert_after_2up (move={move_pct_2:.4f}%)"
+                        strategy_name = "mean_reversion"
+                    elif both_down and move_pct_2 > 0.01:
+                        signal_direction = "UP"
+                        bull_score = min(100, bull_score + 12)
+                        confidence = min(100, 48 + move_pct_2 * 150)
+                        signal_reason = f"revert_after_2down (move={move_pct_2:.4f}%)"
+                        strategy_name = "mean_reversion"
 
-            # STRATEGY 5a: Price direction confirmation
-            # Use the actual close-to-close price movement of recent candles
-            if len(candles) >= 3:
-                recent_3 = candles[-3:]
-                up_moves = sum(1 for i in range(1, len(recent_3))
-                              if recent_3[i]["close"] > recent_3[i-1]["close"])
-                down_moves = sum(1 for i in range(1, len(recent_3))
-                                if recent_3[i]["close"] < recent_3[i-1]["close"])
+            if last_moves:
+                moves_str = ", ".join(f"{m:+.6f}" for m in last_moves)
+                logger.info("Momentum check: moves=[%s] signal=%s", moves_str, signal_direction)
 
-                # Price is going up and last candle closed higher
-                if up_moves >= 2 and total_change > 0:
-                    signal_direction = "UP"
-                    confidence = min(100, 40 + up_moves * 5)
-                    signal_reason = f"price_direction_up (up_moves={up_moves})"
-                elif down_moves >= 2 and total_change < 0:
-                    signal_direction = "DOWN"
-                    confidence = min(100, 40 + down_moves * 5)
-                    signal_reason = f"price_direction_down (down_moves={down_moves})"
-
-            # STRATEGY 5b: Detector consensus with strong agreement only
-            if signal_direction == "NO_TRADE" and det_diff > 15 and scores["confidence"] > 40:
-                if det_bull > det_bear:
-                    signal_direction = "UP"
-                    signal_reason = f"detector_strong_consensus_up (diff={det_diff:.1f})"
-                else:
-                    signal_direction = "DOWN"
-                    signal_reason = f"detector_strong_consensus_down (diff={det_diff:.1f})"
-
-        # Final confidence gate: skip very low-conviction signals
-        if signal_direction != "NO_TRADE" and confidence < 35:
+        # ================================================================
+        # CONFIDENCE GATE — only trade high-conviction setups
+        # ================================================================
+        if signal_direction != "NO_TRADE" and confidence < 40:
             signal_direction = "NO_TRADE"
 
         scores["bullish_score"] = round(bull_score, 2)
         scores["bearish_score"] = round(bear_score, 2)
         scores["confidence"] = round(max(0, min(100, confidence)), 2)
         scores["prediction_direction"] = signal_direction
+        scores["execution_context"] = {
+            "regime": regime,
+            "trend": trend,
+            "trend_strength": round(trend_strength, 4),
+            "alternation_ratio": round(alternation_ratio, 4),
+            "range_pct": round(range_pct, 5),
+            "recent_range_position": round(recent_range_position, 4),
+            "strategy_name": strategy_name,
+            "is_trending": is_trending,
+            "is_alternating": is_alternating,
+            "consecutive_up": consecutive_up,
+            "consecutive_down": consecutive_down,
+        }
 
         if signal_reason:
-            logger.info(
-                "Trend analysis: %s (bull=%.1f bear=%.1f conf=%.1f rsi=%.0f consec_up=%d consec_down=%d)",
-                signal_reason, bull_score, bear_score, confidence, rsi,
-                consecutive_up, consecutive_down,
-            )
+            logger.info(">>> SIGNAL: %s conf=%.1f", signal_reason, confidence)
 
         return scores
 
@@ -705,7 +757,7 @@ class SignalOrchestrator:
         return reasons
 
     def _build_detected_features(
-        self, detector_results: Dict[str, Any]
+        self, detector_results: Dict[str, Any], scores: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Build a summary dict of all detected features across detectors."""
         features: Dict[str, Any] = {}
@@ -770,5 +822,18 @@ class SignalOrchestrator:
         meta = detector_results.get("_meta", {})
         features["candle_count"] = meta.get("candle_count", 0)
         features["parse_mode"] = meta.get("parse_mode", "unknown")
+
+        execution_context = scores.get("execution_context", {})
+        features["regime"] = execution_context.get("regime", "UNKNOWN")
+        features["strategy_name"] = execution_context.get("strategy_name", "none")
+        features["trend"] = execution_context.get("trend", "NONE")
+        features["trend_strength"] = execution_context.get("trend_strength", 0.0)
+        features["alternation_ratio"] = execution_context.get("alternation_ratio", 0.0)
+        features["range_pct"] = execution_context.get("range_pct", 0.0)
+        features["recent_range_position"] = execution_context.get("recent_range_position", 0.5)
+        features["consecutive_up"] = execution_context.get("consecutive_up", 0)
+        features["consecutive_down"] = execution_context.get("consecutive_down", 0)
+        features["agreeing_detector_count"] = scores.get("agreeing_count", 0)
+        features["score_gap"] = scores.get("score_gap", 0.0)
 
         return features

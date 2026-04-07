@@ -28,6 +28,23 @@ function outBadge(o: string | null | undefined): string {
   }
 }
 
+function executionBadge(signal: Signal): { label: string; bg: string; color: string; border: string } {
+  if (signal.execution_ready === false) {
+    return {
+      label: 'BLOCKED',
+      bg: 'rgba(248,81,73,0.15)',
+      color: 'var(--red)',
+      border: '1px solid rgba(248,81,73,0.3)',
+    };
+  }
+  return {
+    label: 'READY',
+    bg: 'rgba(46,160,67,0.15)',
+    color: 'var(--green)',
+    border: '1px solid rgba(46,160,67,0.3)',
+  };
+}
+
 const LiveDashboardPage: React.FC = () => {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -47,7 +64,7 @@ const LiveDashboardPage: React.FC = () => {
           getHealth().catch(() => null),
           getSettings().catch(() => null),
           getAnalyticsSummary().catch(() => null),
-          getSignals({ limit: 50, directional_only: 1 }).catch(() => null),
+          getSignals({ limit: 50, directional_only: 1, executed_only: 1 }).catch(() => null),
         ]);
         if (!active) return;
         setBackendOk(!!h && h.status !== 'error');
@@ -173,16 +190,21 @@ const LiveDashboardPage: React.FC = () => {
               <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>No pending alerts — all signals evaluated. Check History for results.</div>
             ) : (
               <div style={{ padding: 8 }}>
-                {pendingAlerts.map((sig, i) => (
-                  <div key={sig.signal_id} className="alert-row fade-in" style={{ animationDelay: `${i * 30}ms`, gridTemplateColumns: '72px 64px 90px 50px 50px 70px 72px' }}>
+                {pendingAlerts.map((sig, i) => {
+                  const exec = executionBadge(sig);
+                  return (
+                  <div key={sig.signal_id} className="alert-row fade-in" style={{ animationDelay: `${i * 30}ms`, gridTemplateColumns: '72px 64px 90px 50px 50px 70px 78px 82px' }}>
                     <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{formatTime(sig.created_at)}</span>
                     <span className={dirBadge(sig.prediction_direction)} style={{ fontSize: 10, padding: '1px 7px' }}>{sig.prediction_direction || 'N/A'}</span>
                     <span style={{ fontSize: 11, fontWeight: 600, color: sig.market_type === 'LIVE' ? 'var(--green)' : 'var(--blue)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={sig.asset_name || sig.market_type}>{sig.asset_name || sig.market_type}</span>
                     <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{sig.expiry_profile || '--'}</span>
                     <span style={{ fontSize: 12, fontWeight: 600 }}>{sig.confidence?.toFixed(1)}%</span>
                     <span className={outBadge(sig.outcome || sig.status)} style={{ fontSize: 10, padding: '1px 7px' }}>{sig.outcome || sig.status}</span>
+                    <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: 999, background: exec.bg, color: exec.color, border: exec.border, textAlign: 'center', fontWeight: 700 }}>
+                      {exec.label}
+                    </span>
                   </div>
-                ))}
+                )})}
               </div>
             )}
           </div>

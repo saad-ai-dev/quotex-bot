@@ -23,6 +23,7 @@ def _build_history_query(
     min_confidence: Optional[float] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    executed_only: bool = False,
 ) -> dict:
     """Build a MongoDB query dict from the supplied filter parameters."""
     query: dict = {}
@@ -35,6 +36,8 @@ def _build_history_query(
         query["outcome"] = outcome.upper()
     if min_confidence is not None:
         query["confidence"] = {"$gte": min_confidence}
+    if executed_only:
+        query["was_executed"] = True
 
     # Date range filter on created_at (stored as ISO string, lexicographic ordering works)
     if date_from or date_to:
@@ -54,6 +57,7 @@ async def get_history(
     expiry_profile: Optional[str] = Query(None, description="e.g. 1m, 2m, 3m"),
     outcome: Optional[str] = Query(None, description="WIN, LOSS, NEUTRAL, UNKNOWN"),
     min_confidence: Optional[float] = Query(None, ge=0.0, le=1.0),
+    executed_only: bool = Query(True, description="Only include trades actually executed on Quotex"),
     date_from: Optional[str] = Query(None, description="ISO date string lower bound"),
     date_to: Optional[str] = Query(None, description="ISO date string upper bound"),
     skip: int = Query(0, ge=0),
@@ -71,6 +75,7 @@ async def get_history(
         min_confidence=min_confidence,
         date_from=date_from,
         date_to=date_to,
+        executed_only=executed_only,
     )
 
     collection = db["signals"]
@@ -102,7 +107,7 @@ async def get_wins(
     ALERT-ONLY: Signals where the alert prediction was correct.
     """
     collection = db["signals"]
-    query = {"outcome": "WIN", "status": "EVALUATED"}
+    query = {"outcome": "WIN", "status": "EVALUATED", "was_executed": True}
     cursor = (
         collection.find(query, {"_id": 0})
         .sort("created_at", -1)
@@ -126,7 +131,7 @@ async def get_losses(
     ALERT-ONLY: Signals where the alert prediction was incorrect.
     """
     collection = db["signals"]
-    query = {"outcome": "LOSS", "status": "EVALUATED"}
+    query = {"outcome": "LOSS", "status": "EVALUATED", "was_executed": True}
     cursor = (
         collection.find(query, {"_id": 0})
         .sort("created_at", -1)
@@ -150,7 +155,7 @@ async def get_pending(
     ALERT-ONLY: Signals whose alert outcome has not yet been determined.
     """
     collection = db["signals"]
-    query = {"status": "PENDING"}
+    query = {"status": "PENDING", "was_executed": True}
     cursor = (
         collection.find(query, {"_id": 0})
         .sort("created_at", -1)

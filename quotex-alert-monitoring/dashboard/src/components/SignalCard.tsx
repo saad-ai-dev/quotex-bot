@@ -33,6 +33,10 @@ function getOutcomeBadgeClass(outcome: string | null | undefined): string {
   }
 }
 
+function formatBlocker(blocker: string): string {
+  return blocker.replace(/_/g, ' ');
+}
+
 function getConfidenceColor(confidence: number): string {
   if (confidence >= 70) return 'var(--green)';
   if (confidence >= 50) return 'var(--yellow)';
@@ -54,6 +58,8 @@ const SignalCard: React.FC<SignalCardProps> = ({ signal, isNew }) => {
   }
 
   const direction = signal.prediction_direction?.toUpperCase() || 'NO_TRADE';
+  const executionReady = signal.execution_ready !== false;
+  const executionBlockers = signal.execution_blockers || [];
   const glowClass = isNew
     ? direction === 'UP' ? 'alert-new-up' : direction === 'DOWN' ? 'alert-new-down' : ''
     : '';
@@ -97,6 +103,25 @@ const SignalCard: React.FC<SignalCardProps> = ({ signal, isNew }) => {
           />
         </div>
       </div>
+
+      {!executionReady && (
+        <div style={{
+          marginBottom: 20,
+          padding: '12px 14px',
+          background: 'rgba(248, 81, 73, 0.12)',
+          border: '1px solid rgba(248, 81, 73, 0.3)',
+          borderRadius: 8,
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--red)', marginBottom: 6 }}>
+            EXECUTION BLOCKED
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            {executionBlockers.length > 0
+              ? executionBlockers.map(formatBlocker).join(', ')
+              : 'Alert shown for visibility, but trade execution was blocked.'}
+          </div>
+        </div>
+      )}
 
       {/* Info Row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
@@ -154,7 +179,9 @@ const SignalCard: React.FC<SignalCardProps> = ({ signal, isNew }) => {
       {/* Reasons */}
       {signal.reasons && signal.reasons.length > 0 && (
         <div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>REASONS</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+            {executionReady ? 'REASONS' : 'ANALYSIS REASONS'}
+          </div>
           <ul className="reasons-list">
             {signal.reasons.map((reason, i) => (
               <li key={i}>{reason}</li>

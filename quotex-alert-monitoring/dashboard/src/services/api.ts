@@ -63,6 +63,11 @@ export interface Signal {
   created_at: string;
   signal_for_close_at?: string | null;
   evaluated_at?: string | null;
+  execution_ready?: boolean;
+  execution_blockers?: string[];
+  was_executed?: boolean;
+  execution_status?: string;
+  executed_at?: string | null;
 }
 
 export interface SignalListResponse {

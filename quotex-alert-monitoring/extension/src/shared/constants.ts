@@ -41,7 +41,7 @@ export const QUOTEX_ASSET_SELECTORS = [
 ];
 
 /** Default expiry profile */
-export const DEFAULT_EXPIRY_PROFILE = "1m";
+export const DEFAULT_EXPIRY_PROFILE = "2m";
 
 /** Default parse mode */
 export const DEFAULT_PARSE_MODE = "dom";

@@ -30,7 +30,7 @@ export const useStore = create<StoreState>((set) => ({
   lastSignal: null,
   settings: {
     market_mode: "LIVE",
-    expiry_profile: "1m",
+    expiry_profile: "2m",
     sound_enabled: true,
     min_confidence: 60,
   },

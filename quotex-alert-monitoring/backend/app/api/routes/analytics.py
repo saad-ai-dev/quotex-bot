@@ -16,8 +16,11 @@ from app.api.deps import get_db
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["analytics"])
 
-# Only directional signals count for win rate
-DIRECTIONAL_FILTER = {"prediction_direction": {"$in": ["UP", "DOWN"]}}
+# Only executed directional trades count for win rate and performance.
+DIRECTIONAL_FILTER = {
+    "prediction_direction": {"$in": ["UP", "DOWN"]},
+    "was_executed": True,
+}
 
 
 async def _count(collection, query: dict) -> int:
